@@ -1,0 +1,57 @@
+server:
+  port: 8080
+
+spring:
+  config:
+    import:
+      - optional:file:../.env[.properties]
+      - optional:file:.env[.properties]
+  application:
+    name: ai-customer-service
+  datasource:
+    url: ${DB_URL:jdbc:h2:mem:aics;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      # 开发期用 update 自动对齐实体；正式环境可用 sql/schema.sql 建表后改为 validate
+      ddl-auto: update
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+  h2:
+    console:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:replace-with-a-long-development-secret-key-for-jwt-signing}
+    access-token-minutes: ${JWT_ACCESS_TOKEN_MINUTES:1440}
+
+ai:
+  llm-base-url: ${LLM_BASE_URL:https://your-llm-provider.example.com/v1}
+  llm-api-key: ${LLM_API_KEY:replace-me}
+  llm-chat-model: ${LLM_CHAT_MODEL:qwen-plus}
+  embedding-base-url: ${EMBEDDING_BASE_URL:https://your-embedding-provider.example.com/v1}
+  embedding-api-key: ${EMBEDDING_API_KEY:replace-me}
+  embedding-model: ${EMBEDDING_MODEL:text-embedding-3-small}
+  qdrant-url: ${QDRANT_URL:http://localhost:6333}
+  qdrant-collection: ${QDRANT_COLLECTION:kb_chunks}
+  rag-top-k: ${RAG_TOP_K:12}
+  rag-score-threshold: ${RAG_SCORE_THRESHOLD:0.22}
+  rag-max-context-chars: ${RAG_MAX_CONTEXT_CHARS:6000}
+  daily-question-limit: ${DAILY_QUESTION_LIMIT:100}
+  default-support-kb-id: ${DEFAULT_SUPPORT_KB_ID:1}
+  default-technical-kb-id: ${DEFAULT_TECHNICAL_KB_ID:2}

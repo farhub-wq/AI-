@@ -1,0 +1,180 @@
+package com.company.aics.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/**
+ * AI 相关配置属性（{@code ai.*}）：LLM/Embedding 端点、Qdrant、RAG 检索阈值与日提问上限等。
+ * 由 Spring Boot 从配置文件绑定，供 RAG、向量索引与限流逻辑读取。
+ */
+@ConfigurationProperties(prefix = "ai")
+public class AiProperties {
+
+    /** LLM OpenAI 兼容接口基础 URL。 */
+    private String llmBaseUrl;
+    /** LLM API Key。 */
+    private String llmApiKey;
+    /** 对话所用模型名。 */
+    private String llmChatModel;
+    /** Embedding 服务基础 URL。 */
+    private String embeddingBaseUrl;
+    /** Embedding API Key。 */
+    private String embeddingApiKey;
+    /** Embedding 模型名。 */
+    private String embeddingModel;
+    /** Qdrant 服务地址。 */
+    private String qdrantUrl;
+    /** Qdrant collection 名称。 */
+    private String qdrantCollection;
+    /** RAG 检索返回的最大条数。 */
+    private Integer ragTopK = 12;
+    /** RAG 相似度分数阈值，低于此值的命中丢弃。 */
+    private Double ragScoreThreshold = 0.35;
+    /** 拼入 Prompt 的检索上下文最大字符数。 */
+    private Integer ragMaxContextChars = 6000;
+    /** 单用户每日提问上限。 */
+    private Integer dailyQuestionLimit = 100;
+    /** 默认客服支持知识库 ID。 */
+    private Long defaultSupportKbId = 1L;
+    /** 默认技术文档知识库 ID。 */
+    private Long defaultTechnicalKbId = 2L;
+
+    /** @return LLM 基础 URL */
+    public String getLlmBaseUrl() {
+        return llmBaseUrl;
+    }
+
+    /** @param llmBaseUrl 设置 LLM 基础 URL */
+    public void setLlmBaseUrl(String llmBaseUrl) {
+        this.llmBaseUrl = llmBaseUrl;
+    }
+
+    /** @return LLM API Key */
+    public String getLlmApiKey() {
+        return llmApiKey;
+    }
+
+    /** @param llmApiKey 设置 LLM API Key */
+    public void setLlmApiKey(String llmApiKey) {
+        this.llmApiKey = llmApiKey;
+    }
+
+    /** @return 对话模型名 */
+    public String getLlmChatModel() {
+        return llmChatModel;
+    }
+
+    /** @param llmChatModel 设置对话模型名 */
+    public void setLlmChatModel(String llmChatModel) {
+        this.llmChatModel = llmChatModel;
+    }
+
+    /** @return Embedding 基础 URL */
+    public String getEmbeddingBaseUrl() {
+        return embeddingBaseUrl;
+    }
+
+    /** @param embeddingBaseUrl 设置 Embedding 基础 URL */
+    public void setEmbeddingBaseUrl(String embeddingBaseUrl) {
+        this.embeddingBaseUrl = embeddingBaseUrl;
+    }
+
+    /** @return Embedding API Key */
+    public String getEmbeddingApiKey() {
+        return embeddingApiKey;
+    }
+
+    /** @param embeddingApiKey 设置 Embedding API Key */
+    public void setEmbeddingApiKey(String embeddingApiKey) {
+        this.embeddingApiKey = embeddingApiKey;
+    }
+
+    /** @return Embedding 模型名 */
+    public String getEmbeddingModel() {
+        return embeddingModel;
+    }
+
+    /** @param embeddingModel 设置 Embedding 模型名 */
+    public void setEmbeddingModel(String embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
+
+    /** @return Qdrant URL */
+    public String getQdrantUrl() {
+        return qdrantUrl;
+    }
+
+    /** @param qdrantUrl 设置 Qdrant URL */
+    public void setQdrantUrl(String qdrantUrl) {
+        this.qdrantUrl = qdrantUrl;
+    }
+
+    /** @return Qdrant collection 名 */
+    public String getQdrantCollection() {
+        return qdrantCollection;
+    }
+
+    /** @param qdrantCollection 设置 collection 名 */
+    public void setQdrantCollection(String qdrantCollection) {
+        this.qdrantCollection = qdrantCollection;
+    }
+
+    /** @return RAG top-K */
+    public Integer getRagTopK() {
+        return ragTopK;
+    }
+
+    /** @param ragTopK 设置 RAG top-K */
+    public void setRagTopK(Integer ragTopK) {
+        this.ragTopK = ragTopK;
+    }
+
+    /** @return RAG 分数阈值 */
+    public Double getRagScoreThreshold() {
+        return ragScoreThreshold;
+    }
+
+    /** @param ragScoreThreshold 设置分数阈值 */
+    public void setRagScoreThreshold(Double ragScoreThreshold) {
+        this.ragScoreThreshold = ragScoreThreshold;
+    }
+
+    /** @return 上下文最大字符数 */
+    public Integer getRagMaxContextChars() {
+        return ragMaxContextChars;
+    }
+
+    /** @param ragMaxContextChars 设置上下文最大字符数 */
+    public void setRagMaxContextChars(Integer ragMaxContextChars) {
+        this.ragMaxContextChars = ragMaxContextChars;
+    }
+
+    /** @return 日提问上限 */
+    public Integer getDailyQuestionLimit() {
+        return dailyQuestionLimit;
+    }
+
+    /** @param dailyQuestionLimit 设置日提问上限 */
+    public void setDailyQuestionLimit(Integer dailyQuestionLimit) {
+        this.dailyQuestionLimit = dailyQuestionLimit;
+    }
+
+    /** @return 默认客服知识库 ID */
+    public Long getDefaultSupportKbId() {
+        return defaultSupportKbId;
+    }
+
+    /** @param defaultSupportKbId 设置默认客服知识库 ID */
+    public void setDefaultSupportKbId(Long defaultSupportKbId) {
+        this.defaultSupportKbId = defaultSupportKbId;
+    }
+
+    /** @return 默认技术知识库 ID */
+    public Long getDefaultTechnicalKbId() {
+        return defaultTechnicalKbId;
+    }
+
+    /** @param defaultTechnicalKbId 设置默认技术知识库 ID */
+    public void setDefaultTechnicalKbId(Long defaultTechnicalKbId) {
+        this.defaultTechnicalKbId = defaultTechnicalKbId;
+    }
+}

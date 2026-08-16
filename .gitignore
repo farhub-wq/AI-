@@ -1,0 +1,28 @@
+# secrets
+.env
+
+# local / build artifacts
+backend/target/
+backend/logs/
+backend/data/
+frontend/node_modules/
+frontend/dist/
+.history/
+.codeartsdoer/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+*.iml
+
+# local helper scripts (not part of submission)
+backend/start-backend.ps1
+
+# docs not required by README submission
+docs/参考代码片段.md
+docs/任务拆解与SKILL映射.md
+docs/LLM与向量库环境搭建.md
+
+# assignment source file (not part of submission package)
+*.docx

@@ -1,0 +1,124 @@
+<script setup lang="ts">
+import type { MessageView } from "@/api/types"
+
+/**
+ * 消息列表：按角色渲染用户/助手气泡，并展示意图标签与回答状态文案。
+ */
+
+defineProps<{
+  messages: MessageView[]
+}>()
+
+/** 将 answerStatus 转为可读中文状态说明 */
+function statusText(message: MessageView) {
+  if (!message.answerStatus) return ""
+  if (message.answerStatus === "fallback") return "知识库兜底回答"
+  if (message.answerStatus === "degraded") return "模型不可用，已回退为证据摘要"
+  if (message.answerStatus === "error") return "处理失败"
+  if (message.answerStatus === "streaming") return "正在流式输出"
+  return "已完成"
+}
+
+/** 消息角色码转中文标签 */
+function roleLabel(role: string) {
+  return role === "user" ? "用户" : "AI 助手"
+}
+
+/** 意图标签样式分类，便于会话中一眼识别 */
+function intentClass(label?: string | null) {
+  if (!label) return ""
+  if (label.includes("售后")) return "intent after-sales"
+  if (label.includes("投诉")) return "intent complaint"
+  if (label.includes("闲聊")) return "intent chitchat"
+  return "intent product"
+}
+</script>
+
+<template>
+  <div class="message-list glass-panel">
+    <div
+      v-for="message in messages"
+      :key="message.id"
+      class="message-card"
+      :class="message.role"
+    >
+      <div class="message-meta">
+        <span class="badge-soft">{{ roleLabel(message.role) }}</span>
+        <small v-if="message.intentLabel" :class="intentClass(message.intentLabel)">
+          意图：{{ message.intentLabel }}
+        </small>
+        <small>{{ new Date(message.createdAt).toLocaleTimeString() }}</small>
+      </div>
+      <p>{{ message.content }}</p>
+      <div v-if="message.answerStatus" class="message-status mono">{{ statusText(message) }}</div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.message-list {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 360px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.message-card {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.message-card.user {
+  align-self: flex-end;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.message-card.assistant {
+  align-self: flex-start;
+}
+
+.message-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.intent {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.intent.after-sales {
+  background: rgba(245, 158, 11, 0.18);
+  color: #92400e;
+}
+
+.intent.complaint {
+  background: rgba(239, 68, 68, 0.16);
+  color: #991b1b;
+}
+
+.intent.chitchat {
+  background: rgba(100, 116, 139, 0.16);
+  color: #334155;
+}
+
+.intent.product {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
+.message-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #b45309;
+}
+</style>

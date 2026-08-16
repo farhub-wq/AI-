@@ -1,0 +1,68 @@
+:root {
+  font-family: "IBM Plex Sans", "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  color: #172033;
+  background:
+    radial-gradient(circle at top left, rgba(255, 214, 153, 0.55), transparent 34%),
+    radial-gradient(circle at top right, rgba(150, 213, 255, 0.45), transparent 26%),
+    linear-gradient(180deg, #fff8ef 0%, #f4f7fb 56%, #edf1f7 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  color: #172033;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-shell {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(23, 32, 51, 0.08);
+  border-radius: 24px;
+  box-shadow: 0 16px 40px rgba(34, 52, 87, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.section-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.section-subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #5d6a82;
+}
+
+.badge-soft {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 161, 66, 0.14);
+  color: #9a4e00;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+}
