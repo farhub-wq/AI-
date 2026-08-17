@@ -8,6 +8,8 @@ import { clearAuthAndRedirect, getApiBaseUrl } from "@/api/client"
 export interface StreamHandlers {
   onStart: (payload: Record<string, unknown>) => void
   onToken: (payload: Record<string, unknown>) => void
+  /** 一致性校验失败等场景：用新正文整段覆盖已渲染草稿，避免叠字 */
+  onAnswerReplace: (payload: Record<string, unknown>) => void
   onCitation: (payload: Record<string, unknown>) => void
   onEnd: (payload: Record<string, unknown>) => void
   onError: (payload: Record<string, unknown>) => void
@@ -87,6 +89,7 @@ export async function startChatStream(
         // 按事件类型分发给上层 handlers
         if (event === "message_start") handlers.onStart(payloadData)
         if (event === "token") handlers.onToken(payloadData)
+        if (event === "answer_replace") handlers.onAnswerReplace(payloadData)
         if (event === "citation") handlers.onCitation(payloadData)
         if (event === "message_end") {
           streamEnded = true

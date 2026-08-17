@@ -68,6 +68,7 @@ public class AgentReflectionAgent {
             List<String> issues = readStringList(root.path("issues"));
             String lesson = blankOr(root.path("lesson").asText(null), correctionHint);
             if (!approved && !StringUtils.hasText(retryTarget)) {
+                // final 阶段缺省回跳 review，避免空 retryTarget 导致流水线无处重跑
                 retryTarget = defaultTargetForStage(stage);
             }
             return new ReflectionVerdict(approved, retryTarget, errorType, issues, correctionHint, lesson);
@@ -77,6 +78,7 @@ public class AgentReflectionAgent {
         }
     }
 
+    /** 否决但未指定目标时的默认回跳：final → review。 */
     private static String defaultTargetForStage(String stage) {
         if (TARGET_IMPACT.equalsIgnoreCase(stage)) {
             return TARGET_IMPACT;

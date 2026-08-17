@@ -3,7 +3,7 @@ package com.company.aics.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * AI 相关配置属性（{@code ai.*}）：LLM/Embedding 端点、Faiss 本地索引目录、RAG 检索阈值与日提问上限等。
+ * AI 相关配置属性（{@code ai.*}）：LLM/Embedding 端点、本地向量索引目录、RAG 检索阈值与日提问上限等。
  * 由 Spring Boot 从配置文件绑定，供 RAG、向量索引与限流逻辑读取。
  */
 @ConfigurationProperties(prefix = "ai")
@@ -21,7 +21,7 @@ public class AiProperties {
     private String embeddingApiKey;
     /** Embedding 模型名。 */
     private String embeddingModel;
-    /** Faiss 本地文件索引目录（相对后端工作目录）。 */
+    /** 本地向量索引目录（配置键历史名 faiss-index-dir；相对后端工作目录）。 */
     private String faissIndexDir = "data/faiss-index";
     /** RAG 检索返回的最大条数。 */
     private Integer ragTopK = 12;
@@ -102,12 +102,12 @@ public class AiProperties {
         this.embeddingModel = embeddingModel;
     }
 
-    /** @return Faiss 本地索引目录 */
+    /** @return 本地向量索引目录 */
     public String getFaissIndexDir() {
         return faissIndexDir;
     }
 
-    /** @param faissIndexDir 设置 Faiss 本地索引目录 */
+    /** @param faissIndexDir 设置本地向量索引目录 */
     public void setFaissIndexDir(String faissIndexDir) {
         this.faissIndexDir = faissIndexDir;
     }

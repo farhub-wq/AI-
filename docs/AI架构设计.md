@@ -32,7 +32,7 @@ flowchart TD
     OBS --> MYSQL
     AGENT --> MYSQL
 
-    KB --> VEC[VectorIndexService<br/>Faiss 本地文件索引]
+    KB --> VEC[VectorIndexService<br/>自研本地扁平向量索引]
     RAG --> VEC
     AGENT --> VEC
 
@@ -50,7 +50,7 @@ flowchart TD
 | 后端 | Java 21、Spring Boot 3.3、Spring MVC、Security+JWT、JPA |
 | 流式 | `SseEmitter`（`ChatController` / `ChatService`） |
 | LLM/Embedding | `OpenAiCompatibleChatClient` + `LlmCallRetry`（超时/429/5xx 指数退避）；`EmbeddingClient` |
-| 向量 | `VectorIndexService`：Faiss 本地文件模式（IndexFlat 精确余弦落盘，`FAISS_INDEX_DIR`；无需独立向量服务） |
+| 向量 | `VectorIndexService`：自研本地扁平向量索引（Faiss `IndexFlat` 风格精确余弦 + JSON 落盘，`FAISS_INDEX_DIR`；**未引入 Faiss 原生库**，无需独立向量服务） |
 | 前端 | Vue 3 + TS + Vite + Pinia + Element Plus |
 
 ## 4. 客服问答 RAG 完整流程
@@ -165,6 +165,27 @@ flowchart LR
 
 边界：输出**规划与 DAG**，不自动改多仓业务代码；详情见 `项目说明.md` §4。
 
+### 5.4 拆解思路小结
+
+1. **先接地再推理**：技术库检索 + `service_catalog` / `service_dependencies` 作为 Tool 上下文，禁止无证据空想服务名。  
+2. **分角色流水线**：Impact（改谁）→ DAG（并行/串行）→ Review（怎么验）；每段后由 Reflection 否决/重试，失败教训写入 `agent_error_memory`。  
+3. **程序校验兜底**：DAG 环检测、缺失依赖边、空影响面等由代码硬校验，不单靠 LLM 自觉。  
+4. **可降级**：整链失败走 `rules_fallback`，保证工作台仍有可评审输出。
+
+### 5.5 效果说明与验证方式
+
+以人工用例为主（与客服 RAG 验证集分离），最小集：
+
+| 用例 | 期望 | 如何判定 |
+| --- | --- | --- |
+| 「用户下单后自动发短信」 | 命中 order / user / notification / mall-web；通知依赖订单+用户 | `impactedServices` 含上述服务；`dependsOn` 体现串行；工作台可见并行组 |
+| 「只改前端文案」 | 主要 mall-web，少牵后端 | 影响面窄；无多余 notification |
+| 故意空/模糊需求 | `partial` 或 `missingEvidence` 提示 | 不假装完整 DAG |
+| 人为制造 Impact 漏服务后重试 | Reflection 否决并写入错误记忆 | `agent_error_memory` 有记录；`reflectionRetryCount`>0 或 `agentTrace` 可见重试 |
+| 断 LLM / 配错模型 | 降级 `rules_fallback` 仍出计划 | `planningMode=rules_fallback`，页面仍可展示 |
+
+回归：改 Prompt 或依赖表后，用同一需求对比影响面是否漂移、并行组是否误并。
+
 ## 6. Prompt 设计
 
 ### 6.1 System Prompt（有证据，与代码对齐）
@@ -195,7 +216,7 @@ flowchart LR
 | 分层 | 政策优先 + 背景摘要 |
 | 意图 | 售后/投诉更低 temperature |
 | 空检索 | 硬阈值，无软塞弱证据 |
-| 后校验 | 回答数字须出现在证据中，否则 `degraded` |
+| 后校验 | 仅校验「数字+业务单位」（天/元/%/次等）；失败发 `answer_replace` 整段替换为证据摘要 |
 
 ### 6.4 Agent 说明
 

@@ -196,14 +196,31 @@ data: {"delta":"根据当前知识库，"}
 event: token
 data: {"delta":"签收后 7 天内可申请无理由退货。"}
 
+event: answer_replace
+data: {"content":"","reason":"answer-contains-claim-numbers-not-in-evidence:15天"}
+
+event: token
+data: {"delta":"根据当前知识库资料（保守摘要）："}
+
 event: citation
 data: {"items":[{"documentId":12,"documentName":"退换货政策.txt","chunkId":"vec-...","snippet":"签收之日起 7 个自然日内..."}]}
 
 event: message_end
-data: {"messageId":1002,"answerStatus":"success","intentLabel":"售后问题","kbId":1,"followUpSuggestions":["退货运费由谁承担？","哪些商品不支持无理由退货？"],"traceId":"...","evidencePacking":"..."}
+data: {"messageId":1002,"answerStatus":"degraded","intentLabel":"售后问题","kbId":1,"followUpSuggestions":["退货运费由谁承担？","哪些商品不支持无理由退货？"],"traceId":"...","evidencePacking":"..."}
 ```
 
-错误：
+事件说明：
+
+| event | 含义 |
+| --- | --- |
+| `message_start` | 分配 `messageId`，下发意图与证据打包摘要 |
+| `token` | 增量文本；前端追加到当前草稿 |
+| `answer_replace` | **整段覆盖**草稿（`content` 常为空表示先清空）。用于一致性校验失败或 LLM 降级，避免错误答案与兜底叠字；随后继续用 `token` 推送新正文 |
+| `citation` | 引用列表一次性下发 |
+| `message_end` | 终态：`answerStatus`、`followUpSuggestions`（优先 LLM 生成，失败回退模板） |
+| `error` | 流失败 |
+
+错误示例：
 
 ```text
 event: error
@@ -211,6 +228,8 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 ```
 
 `answerStatus`：`success` | `fallback` | `degraded` | `streaming`
+
+> 注：上例中的 `answer_replace` 仅在校验失败/降级时出现；正常成功路径为 `token` → `citation` → `message_end`。
 
 ---
 

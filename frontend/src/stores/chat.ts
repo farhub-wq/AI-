@@ -114,6 +114,7 @@ export const useChatStore = defineStore("chat", () => {
       citations: [],
       createdAt: new Date().toISOString()
     }
+    // 快照当前会话：流式回调期间用户可能切换会话，后续写回必须以本轮 conversationId 为准
     const conversationSnapshot = currentConversation.value
     if (!conversationSnapshot) {
       return
@@ -168,6 +169,12 @@ export const useChatStore = defineStore("chat", () => {
           onToken: payload => {
             if (!streamDraft.value) return
             streamDraft.value.content += String(payload.delta ?? "")
+          },
+          // answer_replace：整段覆盖草稿（校验失败 / LLM 降级），后续 token 再追加
+          onAnswerReplace: payload => {
+            if (!streamDraft.value) return
+            streamDraft.value.content = String(payload.content ?? "")
+            streamDraft.value.answerStatus = "degraded"
           },
           // citation：覆盖更新引用列表
           onCitation: payload => {

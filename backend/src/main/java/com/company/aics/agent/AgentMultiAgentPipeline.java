@@ -62,6 +62,12 @@ public class AgentMultiAgentPipeline {
 
     /**
      * 尝试 LLM 多 Agent + 反思监督规划；失败返回 empty，由调用方降级规则路径。
+     * <p>
+     * 每阶段 Reflection 最多重试 {@link #MAX_REFLECTION_RETRIES_PER_STAGE} 次（默认 1）：
+     * 在纠错能力与延迟/费用之间折中，避免否决循环拖垮接口。
+     * DAG 先做程序 {@code validateDag}（环、越界服务、重复 taskId）再交给 Reflection，
+     * 结构性错误不必浪费一次 LLM 评审。
+     * final 否决可按 {@code retryTarget} 回跳 Impact/Dag/Review，只重跑必要阶段以降本。
      */
     public Optional<PipelineResult> tryPlan(
             String requirementTitle,
@@ -562,11 +568,17 @@ public class AgentMultiAgentPipeline {
                     blankToNull(root.path("assistSummary").asText(null))
             );
         } catch (Exception ex) {
+            // 评审失败不拖垮整条规划：保留 DagAgent 已产出的校验/清单文案
             log.warn("ReviewAgent failed, keep DagAgent text: {}", ex.getMessage());
             return new ReviewResult(dag.validationSteps(), dag.reviewChecklist(), null);
         }
     }
 
+    /**
+     * 解析 DagAgent JSON：静默丢弃影响面外服务（硬约束）；
+     * taskId 缺省时用递增 autoId，并与 LLM 自带 id 混用兼容；
+     * releaseOrder 末尾补全 allowed，避免漏服务导致前端发布顺序不完整。
+     */
     private DagResult parseDag(JsonNode root, ImpactResult impact, ToolContext tools) {
         Set<String> allowed = impact.impactedServices().stream()
                 .map(DomainModels.ImpactedService::serviceCode)
@@ -638,6 +650,7 @@ public class AgentMultiAgentPipeline {
         }
         for (String code : allowed) {
             if (!releaseOrder.contains(code)) {
+                // LLM 常漏列部分服务；补全保证发布顺序覆盖全部影响面
                 releaseOrder.add(code);
             }
         }
@@ -651,6 +664,9 @@ public class AgentMultiAgentPipeline {
         );
     }
 
+    /**
+     * 程序侧 DAG 硬校验。失败则整段流水线应降级规则路径，避免把环依赖/越界任务交给前端执行。
+     */
     private String validateDag(DagResult dag, ImpactResult impact) {
         if (dag.tasks().isEmpty()) {
             return "tasks 不能为空";

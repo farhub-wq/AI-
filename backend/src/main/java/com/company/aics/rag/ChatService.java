@@ -20,7 +20,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * RAG 流式问答服务：日限流、检索重排、拼装上下文，经 SSE 推送 token/引用/结束事件。
- * 无证据时走本地兜底文案；LLM 失败时降级为证据摘要回答。
+ * 无证据时走本地兜底；一致性校验失败时发 {@code answer_replace} 整段替换；追问优先 LLM 生成。
+ * <p>
+ * {@code answerStatus} 语义（供管理看板与会话气泡）：
+ * {@code streaming} 生成中；{@code success} 正常；{@code fallback} 无证据兜底；
+ * {@code degraded} LLM 失败/空答/一致性校验失败后的降级回答。
  */
 @Service
 public class ChatService {
@@ -199,21 +203,30 @@ public class ChatService {
                             answerStatus = "degraded";
                             streamLocalText(emitter, answerBuilder, buildEvidenceFallback(evidenceBundle));
                         } else {
-                            // 分步校验：回答中的关键数字须能在证据中找到，否则降级为证据摘要
+                            // 分步校验：回答中的政策类数字须能在证据中找到，否则整段替换为证据摘要
                             EvidenceGovernanceService.ConsistencyCheck check =
                                     evidenceGovernanceService.validateAnswer(answerBuilder.toString(), evidenceBundle);
                             if (!check.passed()) {
                                 log.warn("Answer consistency check failed traceId={} reason={}", traceId, check.reason());
-                                answerBuilder.setLength(0);
                                 answerStatus = "degraded";
-                                streamLocalText(emitter, answerBuilder, buildEvidenceFallback(evidenceBundle)
-                                        + "\n\n（系统校验：模型回答含证据外数字，已改为仅基于知识库摘要回复。）");
+                                replaceAndStreamLocalText(
+                                        emitter,
+                                        answerBuilder,
+                                        buildEvidenceFallback(evidenceBundle)
+                                                + "\n\n（系统校验：模型回答含证据外政策数字，已改为仅基于知识库摘要回复。）",
+                                        check.reason()
+                                );
                             }
                         }
                     } catch (Exception ex) {
                         log.warn("LLM 流式调用在重试后仍失败，回退到证据摘要回答。", ex);
                         answerStatus = "degraded";
-                        streamLocalText(emitter, answerBuilder, buildEvidenceFallback(evidenceBundle));
+                        replaceAndStreamLocalText(
+                                emitter,
+                                answerBuilder,
+                                buildEvidenceFallback(evidenceBundle),
+                                "llm-stream-failed"
+                        );
                     }
                 }
 
@@ -230,7 +243,11 @@ public class ChatService {
                     sendEvent(emitter, "citation", Map.of("items", items));
                 }
 
-                List<String> followUps = buildFollowUpSuggestions(intentLabel, question);
+                List<String> followUps = buildFollowUpSuggestions(
+                        intentLabel,
+                        question,
+                        answerBuilder.toString().trim()
+                );
                 int latencyMs = (int) Math.max(1, System.currentTimeMillis() - startedAt);
                 conversationService.updateAssistantMessage(
                         assistantMessage.id(),
@@ -278,6 +295,24 @@ public class ChatService {
             sendEvent(emitter, "token", Map.of("delta", part));
             sleepQuietly(25L);
         }
+    }
+
+    /**
+     * 先发 {@code answer_replace} 清空前端已渲染草稿，再流式推送替换正文。
+     * 用于一致性校验失败或 LLM 中途失败后的整段降级，避免「错误答案 + 兜底」叠字。
+     */
+    private void replaceAndStreamLocalText(
+            SseEmitter emitter,
+            StringBuilder answerBuilder,
+            String text,
+            String reason
+    ) throws IOException {
+        answerBuilder.setLength(0);
+        sendEvent(emitter, "answer_replace", Map.of(
+                "content", "",
+                "reason", reason == null ? "" : reason
+        ));
+        streamLocalText(emitter, answerBuilder, text);
     }
 
     /**
@@ -348,9 +383,22 @@ public class ChatService {
     }
 
     /**
-     * 按意图标签返回 2–3 条追问建议，便于用户继续点选。
+     * 优先用 LLM 基于当轮问答生成 2–3 条追问；失败则按意图回退模板。
      */
-    private List<String> buildFollowUpSuggestions(String intentLabel, String question) {
+    private List<String> buildFollowUpSuggestions(String intentLabel, String question, String answer) {
+        try {
+            List<String> fromLlm = chatClient.suggestFollowUps(question, answer, intentLabel);
+            if (fromLlm != null && fromLlm.size() >= 2) {
+                return fromLlm.stream().limit(3).toList();
+            }
+        } catch (Exception ex) {
+            log.warn("LLM follow-up suggestions failed, fallback to templates: {}", ex.getMessage());
+        }
+        return templateFollowUps(intentLabel, question);
+    }
+
+    /** 意图模板追问（LLM 不可用时的兜底）。 */
+    private List<String> templateFollowUps(String intentLabel, String question) {
         if (IntentClassifier.AFTER_SALES.equals(intentLabel)
                 || question.contains("退货") || question.contains("退款")) {
             return List.of("退货运费由谁承担？", "哪些商品不支持无理由退货？", "退款多久到账？");

@@ -31,7 +31,10 @@ import org.springframework.util.StringUtils;
 
 /**
  * OpenAI 兼容 Chat Completions 客户端：支持同步生成与 SSE 流式输出。
- * 对超时 / 429 / 5xx 做指数退避重试；Windows 同步调用在 OkHttp 失败时可回退 PowerShell。
+ * 对超时 / 429 / 5xx 做指数退避重试；Windows 同步调用在 OkHttp 失败时可回退 PowerShell
+ *（部分本机代理/TLS 场景下 OkHttp 会异常，而系统 HttpClient 仍可用）。
+ * <p>
+ * 请求 JSON 强制 {@code ESCAPE_NON_ASCII}：部分兼容网关对未转义中文 body 解析不稳定。
  */
 @Component
 public class OpenAiCompatibleChatClient {
@@ -230,6 +233,119 @@ public class OpenAiCompatibleChatClient {
                     }
                 }
         );
+    }
+
+    /**
+     * 根据当轮问答生成 2–3 条追问建议；失败由调用方回退模板。
+     * 期望模型逐行输出问句，或输出 JSON 字符串数组。
+     */
+    public List<String> suggestFollowUps(String question, String answer, String intentLabel) {
+        validateConfiguration();
+
+        String endpoint = normalizeBaseUrl(aiProperties.getLlmBaseUrl()) + "/chat/completions";
+        String clippedAnswer = answer == null ? "" : answer.trim();
+        if (clippedAnswer.length() > 800) {
+            clippedAnswer = clippedAnswer.substring(0, 800) + "...";
+        }
+        String requestJson;
+        try {
+            var body = objectMapper.createObjectNode();
+            body.put("model", aiProperties.getLlmChatModel());
+            body.put("temperature", 0.4);
+            body.put("max_tokens", 120);
+            var messages = body.putArray("messages");
+            messages.addObject()
+                    .put("role", "system")
+                    .put("content", """
+                            你是电商智能客服的追问生成器。根据用户问题与助手回答，生成 2 到 3 条用户可能继续点击的追问。
+                            要求：
+                            1. 每条是简短中文问句，不超过 24 字。
+                            2. 与当前回答相关，可引导查政策/时效/下一步操作，不要重复原问题。
+                            3. 不要解释、不要编号、不要 Markdown；每行一条问句。
+                            """);
+            messages.addObject()
+                    .put("role", "user")
+                    .put("content", "意图：" + (intentLabel == null ? "" : intentLabel)
+                            + "\n用户问题：\n" + question
+                            + "\n助手回答：\n" + clippedAnswer
+                            + "\n\n请输出 2-3 条追问（每行一条）：");
+            requestJson = objectMapper.writer()
+                    .with(JsonWriteFeature.ESCAPE_NON_ASCII.mappedFeature())
+                    .writeValueAsString(body);
+        } catch (IOException ex) {
+            throw new IllegalStateException("序列化追问建议请求失败。", ex);
+        }
+
+        final String payload = requestJson;
+        String raw = LlmCallRetry.execute(
+                "follow-up",
+                maxAttempts(),
+                baseDelayMs(),
+                maxDelayMs(),
+                () -> {
+                    try {
+                        return extractAnswer(executeWithOkHttp(endpoint, payload)).trim();
+                    } catch (AiServiceException ex) {
+                        throw ex;
+                    } catch (IOException ex) {
+                        if (isWindows()) {
+                            try {
+                                return extractAnswer(executeWithPowerShell(endpoint, payload)).trim();
+                            } catch (IOException fallbackEx) {
+                                fallbackEx.addSuppressed(ex);
+                                throw LlmCallRetry.classify(fallbackEx);
+                            }
+                        }
+                        throw LlmCallRetry.classify(ex);
+                    }
+                }
+        );
+        return parseFollowUpLines(raw);
+    }
+
+    /** 解析追问：支持逐行问句或简单 JSON 数组。 */
+    List<String> parseFollowUpLines(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return List.of();
+        }
+        String text = raw.trim();
+        if (text.startsWith("[")) {
+            try {
+                JsonNode arr = objectMapper.readTree(text);
+                if (arr.isArray()) {
+                    List<String> items = new ArrayList<>();
+                    for (JsonNode node : arr) {
+                        String q = node.asText("").trim();
+                        if (StringUtils.hasText(q)) {
+                            items.add(trimFollowUp(q));
+                        }
+                    }
+                    return items.stream().filter(StringUtils::hasText).limit(3).toList();
+                }
+            } catch (Exception ignored) {
+                // fall through to line parse
+            }
+        }
+        List<String> lines = new ArrayList<>();
+        for (String line : text.split("\\R")) {
+            String cleaned = trimFollowUp(line);
+            if (StringUtils.hasText(cleaned)) {
+                lines.add(cleaned);
+            }
+        }
+        return lines.stream().limit(3).toList();
+    }
+
+    private static String trimFollowUp(String line) {
+        String cleaned = line.trim()
+                .replaceFirst("^\\d+[\\.\\)、]\\s*", "")
+                .replaceFirst("^[-*•]\\s*", "")
+                .replace("\"", "")
+                .trim();
+        if (cleaned.length() > 40) {
+            cleaned = cleaned.substring(0, 40);
+        }
+        return cleaned;
     }
 
     /**
@@ -542,7 +658,8 @@ public class OpenAiCompatibleChatClient {
     }
 
     /**
-     * 去掉历史末尾与当前问题重复的用户消息，避免重复注入。
+     * 去掉历史末尾与当前问题重复的用户消息。
+     * 前端/会话层可能已把本轮问题写入 history，再拼一次会让模型看到双份同一问句。
      */
     private List<DomainModels.Message> stripDuplicatedCurrentQuestion(List<DomainModels.Message> history, String question) {
         if (history == null || history.isEmpty()) {
@@ -559,6 +676,7 @@ public class OpenAiCompatibleChatClient {
 
     /**
      * 按是否有知识证据与意图类型生成系统提示（减幻觉强化版）。
+     * 核心约束：只能引用编号证据；must_keep_policy 冲突时优先；background 不得单独立规。
      */
     private String buildSystemPrompt(boolean hasKnowledgeEvidence, String intentLabel) {
         String intentHint = switch (intentLabel) {

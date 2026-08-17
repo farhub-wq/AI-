@@ -20,7 +20,13 @@ import org.springframework.util.StringUtils;
 @Component
 public class EvidenceGovernanceService {
 
-    private static final Pattern NUMBER_PATTERN = Pattern.compile("\\d+(?:\\.\\d+)?");
+    /**
+     * 仅校验「带业务单位的政策/时效/金额类数字」，避免误伤订单号、年份、序号等噪声。
+     * 例：7天、48小时、99元、15%、3个工作日。
+     */
+    private static final Pattern CLAIM_NUMBER_PATTERN = Pattern.compile(
+            "(\\d+(?:\\.\\d+)?)\\s*(?:个)?\\s*(天|日|自然日|工作日|小时|分钟|元|块|万元|%|％|件|次)"
+    );
 
     /**
      * 分层后的单条证据（入模文本可能是原文或抽取摘要）。
@@ -67,6 +73,9 @@ public class EvidenceGovernanceService {
     /**
      * 对阈值过滤后的命中做三段式打包：
      * must_keep_policy → high_relevance → background（背景做抽取式压缩）。
+     * <p>
+     * 设计动机：大量命中直接塞进 Prompt 会稀释注意力、混写规则；
+     * 分层 + 字符预算强制「政策优先、背景压缩」，并保证高相关层至少有少量条目可读。
      */
     public EvidenceBundle pack(
             List<KnowledgeBaseService.SearchHit> filteredHits,
@@ -82,6 +91,7 @@ public class EvidenceGovernanceService {
         List<KnowledgeBaseService.SearchHit> highs = new ArrayList<>();
         List<KnowledgeBaseService.SearchHit> backgrounds = new ArrayList<>();
 
+        // 相对最高分的 75% 切高相关；避免绝对阈值在不同 Embedding 量纲下失效
         double highScoreCut = deduped.stream()
                 .mapToDouble(KnowledgeBaseService.SearchHit::score)
                 .max()
@@ -91,13 +101,14 @@ public class EvidenceGovernanceService {
             if (isPolicy(hit)) {
                 policies.add(hit);
             } else if (hit.score() >= highScoreCut || highs.size() < 3) {
+                // 未满 3 条时强制抬入高相关，避免全被压到背景层导致本题无直接支撑
                 highs.add(hit);
             } else {
                 backgrounds.add(hit);
             }
         }
 
-        // 预算：政策优先占约 45%，高相关 40%，背景 15%
+        // 预算：政策优先占约 45%，高相关 40%，背景 15%（与 Prompt「政策层必须遵守」对齐）
         int policyBudget = Math.max(800, (int) (maxContextChars * 0.45));
         int highBudget = Math.max(800, (int) (maxContextChars * 0.40));
         int bgBudget = Math.max(400, maxContextChars - policyBudget - highBudget);
@@ -106,6 +117,7 @@ public class EvidenceGovernanceService {
         List<LayeredEvidence> highLayer = takeWithBudget(highs, "high_relevance", highBudget, 4, false, question);
         List<LayeredEvidence> bgLayer = takeWithBudget(backgrounds, "background", bgBudget, 3, true, question);
 
+        // 跨层统一重排为 E1…En，保证 Prompt 编号与前端 citation 一一对应
         renumber(policyLayer, highLayer, bgLayer);
 
         List<KnowledgeBaseService.SearchHit> citations = new ArrayList<>();
@@ -122,7 +134,8 @@ public class EvidenceGovernanceService {
     }
 
     /**
-     * 分步校验：回答中的关键数字应能在证据原文中找到，降低编造时效/金额的风险。
+     * 分步校验：仅检查回答中带业务单位的数字（天/元/%/次等）是否出现在证据中，
+     * 降低编造时效/金额风险，同时避免订单号、年份等误伤。
      */
     public ConsistencyCheck validateAnswer(String answer, EvidenceBundle bundle) {
         if (!StringUtils.hasText(answer) || bundle == null || bundle.isEmpty()) {
@@ -132,24 +145,30 @@ public class EvidenceGovernanceService {
                 .map(LayeredEvidence::displayText)
                 .reduce("", (a, b) -> a + "\n" + b);
 
-        Matcher matcher = NUMBER_PATTERN.matcher(answer);
+        Matcher matcher = CLAIM_NUMBER_PATTERN.matcher(answer);
         List<String> unsupported = new ArrayList<>();
         while (matcher.find()) {
-            String num = matcher.group();
-            // 忽略过短编号噪声（如 E1 中的 1 已由上下文覆盖）；关注 2 位及以上或业务常见数字
-            if (num.length() == 1) {
-                continue;
-            }
-            if (!evidenceBlob.contains(num)) {
-                unsupported.add(num);
+            String num = matcher.group(1);
+            String unit = matcher.group(2);
+            String claim = num + unit;
+            // 数字本身或「数字+单位」任一能在证据中找到即通过
+            if (!evidenceBlob.contains(num) && !evidenceBlob.contains(claim)) {
+                unsupported.add(claim);
             }
         }
         if (!unsupported.isEmpty()) {
-            return new ConsistencyCheck(false, "answer-contains-numbers-not-in-evidence:" + String.join(",", unsupported));
+            return new ConsistencyCheck(
+                    false,
+                    "answer-contains-claim-numbers-not-in-evidence:" + String.join(",", unsupported)
+            );
         }
         return new ConsistencyCheck(true, "ok");
     }
 
+    /**
+     * 按层填充证据，受条数与字符预算约束。
+     * 首条允许超出预算：宁可略超也要保证该层至少有一条可读证据，避免空层。
+     */
     private List<LayeredEvidence> takeWithBudget(
             List<KnowledgeBaseService.SearchHit> source,
             String layer,
@@ -178,6 +197,7 @@ public class EvidenceGovernanceService {
         return result;
     }
 
+    /** 跨层重新编号为连续 E1…En，避免各层本地编号冲突。 */
     private void renumber(List<LayeredEvidence> a, List<LayeredEvidence> b, List<LayeredEvidence> c) {
         List<LayeredEvidence> all = concat(a, b, c);
         List<LayeredEvidence> rebuilt = new ArrayList<>();
@@ -207,7 +227,9 @@ public class EvidenceGovernanceService {
     }
 
     /**
-     * 去重（同 vectorId / 高相似正文）并合并同文档相邻切块。
+     * 去重（同 vectorId / 正文指纹）并合并同文档相邻切块。
+     * 合并动机：切块边界常把同一条政策拆成两段，分开展示易导致模型混写或漏条件；
+     * 合并上限约 900 字，避免单条证据过长挤占预算。
      */
     private List<KnowledgeBaseService.SearchHit> dedupeAndMerge(List<KnowledgeBaseService.SearchHit> hits) {
         List<KnowledgeBaseService.SearchHit> sorted = hits.stream()

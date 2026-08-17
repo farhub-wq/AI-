@@ -24,11 +24,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Faiss 风格本地文件向量索引（对齐题目 FAQ：本地文件模式，无需独立向量服务）。
+ * 自研本地扁平向量索引（Faiss IndexFlat 风格精确余弦；JSON 落盘）。
  * <p>
- * 采用与 Faiss {@code IndexFlatIP} 同类的精确余弦检索，向量与 metadata 落盘到
- * {@code ai.faiss-index-dir}；相对 Chroma 免 Docker/额外进程，更适合本仓库快速开发，
- * 同时具备删除同步、kb/service 过滤与重启复用向量（同内容跳过重新 Embedding）等生产向能力。
+ * 对齐题目 FAQ「本地文件模式、无需独立向量服务」：未引入 Faiss/Chroma 原生库，
+ * 用内存 {@link ConcurrentHashMap} + {@code index.json} 即可完整跑通 RAG/Agent。
+ * 落盘经 {@code persistLock} 写临时文件再原子替换，避免半写损坏。
+ * <p>
+ * 检索侧对 policy 文档 +0.05 轻偏置；最终「政策优先占预算」仍由
+ * {@link EvidenceGovernanceService} 分层打包负责，两者分工：召回偏好 vs 入模配额。
  */
 @Service
 public class VectorIndexService {
@@ -43,7 +46,7 @@ public class VectorIndexService {
 
     /**
      * @param embeddingClient 向量化客户端
-     * @param aiProperties    Faiss 索引目录等配置
+     * @param aiProperties    本地向量索引目录等配置
      * @param objectMapper    JSON 读写
      */
     public VectorIndexService(
@@ -56,12 +59,12 @@ public class VectorIndexService {
         this.objectMapper = objectMapper;
     }
 
-    /** 启动时从本地 Faiss 索引文件加载，避免无谓重新 Embedding。 */
+    /** 启动时从本地索引文件加载，避免无谓重新 Embedding。 */
     @PostConstruct
     void loadFromDisk() {
         Path indexFile = indexFile();
         if (!Files.isRegularFile(indexFile)) {
-            log.info("Faiss local index empty, will create on first upsert: {}", indexFile.toAbsolutePath());
+            log.info("Local vector index empty, will create on first upsert: {}", indexFile.toAbsolutePath());
             return;
         }
         try {
@@ -78,9 +81,9 @@ public class VectorIndexService {
                     loaded++;
                 }
             }
-            log.info("Faiss local index loaded: {} points from {}", loaded, indexFile.toAbsolutePath());
+            log.info("Local vector index loaded: {} points from {}", loaded, indexFile.toAbsolutePath());
         } catch (Exception ex) {
-            log.warn("Faiss local index load failed, starting empty: {}", ex.getMessage());
+            log.warn("Local vector index load failed, starting empty: {}", ex.getMessage());
             memoryIndex.clear();
         }
     }
@@ -156,7 +159,7 @@ public class VectorIndexService {
     }
 
     /**
-     * 检索：Faiss IndexFlat 风格精确余弦 + metadata 过滤；policy 额外 +0.05。
+     * 检索：精确余弦 + metadata 过滤；policy 额外 +0.05（召回偏置，不替代证据治理预算）。
      */
     public List<ScoredChunk> search(
             Long kbId,
@@ -188,7 +191,7 @@ public class VectorIndexService {
         return scored.subList(0, topK);
     }
 
-    /** 将当前索引原子写入本地文件。 */
+    /** 将当前索引原子写入本地文件（先写 .tmp 再 move，降低崩溃半写风险）。 */
     private void persistToDisk() {
         synchronized (persistLock) {
             try {
@@ -214,7 +217,7 @@ public class VectorIndexService {
                     Files.move(tempFile, indexFile, StandardCopyOption.REPLACE_EXISTING);
                 }
             } catch (Exception ex) {
-                log.warn("Faiss local index persist failed: {}", ex.getMessage());
+                log.warn("Local vector index persist failed: {}", ex.getMessage());
             }
         }
     }

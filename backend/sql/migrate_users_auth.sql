@@ -1,4 +1,5 @@
 -- 对齐 schema.sql 中 users 表变更（可重复执行）
+-- 注意：新库请直接执行 schema.sql（已含可空 email / display_name 唯一）。本脚本仅用于旧库升级。
 -- 1) email 允许为空（手机号注册）
 -- 2) display_name 全局唯一
 -- 3) 演示账号邮箱改为允许后缀 @qq.com

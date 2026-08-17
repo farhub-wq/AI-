@@ -91,6 +91,10 @@ public class AgentPlanLlmAssistant {
         }
     }
 
+    /**
+     * 只采纳 LLM 对 reason/摘要/清单的润色；serviceCode、taskId、dependsOn、executionMode 一律锁定。
+     * 防止润色阶段偷偷扩影响面或改 DAG 结构；结构正确性由规则/多 Agent 流水线保证。
+     */
     private AssistResult applyLocked(
             JsonNode root,
             List<DomainModels.ImpactedService> impactedServices,
@@ -167,7 +171,7 @@ public class AgentPlanLlmAssistant {
             summary = summary.trim();
         }
 
-        // 若 LLM 几乎没改任何东西，仍算 success（调用成功）
+        // 即使文案几乎未改也标 success：表示「LLM 调用成功且结构未破坏」，与 failed（异常）区分
         return new AssistResult(
                 polishedImpacted,
                 polishedTasks,

@@ -21,8 +21,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * Embedding 客户端：优先调用 OpenAI 兼容远程接口，未配置或失败时回退本地哈希向量。
- * 本地向量维度固定 384，保证演示环境在无 Key 时仍可完成 RAG 检索。
+ * Embedding 客户端：优先调用 OpenAI 兼容远程接口；未配置或失败时回退本地哈希向量。
+ * 本地向量仅保证链路可跑通，检索相关性差——演示/验收请配置有效 Embedding。
  */
 @Component
 public class EmbeddingClient {
@@ -53,6 +53,8 @@ public class EmbeddingClient {
 
     /**
      * 对单段文本生成向量；远程失败或未配置时使用本地 embedding。
+     * 降级是静默的（只打 warn）：保证入库/问答链路不中断，但本地向量与远程不在同一语义空间，
+     * 检索质量会明显变差——验收环境应配置有效 Embedding Key。
      */
     public float[] embed(String text) {
         if (!StringUtils.hasText(text)) {
@@ -132,7 +134,9 @@ public class EmbeddingClient {
     }
 
     /**
-     * 确定性 n-gram + token 哈希 bag 向量，适配中英文演示检索。
+     * 确定性 n-gram + token 哈希 bag 向量（维度固定 384，与常见小模型量级接近，便于本地演示）。
+     * 非语义 Embedding：同词面相近文本会有一定重合，但无法理解同义改写；仅作无 API Key 时的链路占位。
+     * 权重：trigram &gt; bigram &gt; unigram；整词 token 再加权，缓解中文无空格切分过碎。
      */
     float[] localEmbed(String text) {
         float[] vector = new float[LOCAL_DIMENSION];
@@ -141,7 +145,7 @@ public class EmbeddingClient {
             return vector;
         }
 
-        // 字符 unigram / bigram / trigram 哈希累加
+        // 字符 unigram / bigram / trigram 哈希累加（更长 n-gram 权重更高）
         for (int i = 0; i < normalized.length(); i++) {
             int uni = Math.floorMod(normalized.charAt(i) * 131 + 17, LOCAL_DIMENSION);
             vector[uni] += 1.0f;
@@ -158,7 +162,7 @@ public class EmbeddingClient {
             }
         }
 
-        // 分词 token 额外加权
+        // 分词 token 额外加权（英文空格词 / 中文标点切分后的片段）
         for (String token : normalized.split("[\\s,，。！？、；：/\\\\|_-]+")) {
             if (token.length() < 2) {
                 continue;

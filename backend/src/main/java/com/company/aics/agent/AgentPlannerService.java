@@ -393,6 +393,11 @@ public class AgentPlannerService {
         return new RequirementSignals(List.copyOf(actions), List.copyOf(entities), List.copyOf(sideEffects), searchQuery);
     }
 
+    /**
+     * 按需求语义信号抬高相关服务候选分。
+     * 幅度约定：核心动作服务 +1.0，配套依赖 +0.8，弱相关 +0.5~0.6；
+     * 通知类需求会同时抬 user-service（取号）与 order-service（事件源）。
+     */
     private void boostBySignals(
             RequirementSignals signals,
             Map<String, CandidateScore> candidateMap,
@@ -474,6 +479,7 @@ public class AgentPlannerService {
                 if ("event".equalsIgnoreCase(edge.dependencyType())
                         || "data".equalsIgnoreCase(edge.dependencyType())
                         || "api".equalsIgnoreCase(edge.dependencyType())) {
+                    // mall-web 多为展示/文案，除 event 外不强制改成 serial，便于与后端并行
                     if (!"mall-web".equals(edge.toServiceCode()) || "event".equalsIgnoreCase(edge.dependencyType())) {
                         if (!"mall-web".equals(edge.toServiceCode())) {
                             toDraft.executionMode = "serial";
@@ -509,6 +515,7 @@ public class AgentPlannerService {
             }
         }
         if (draftByService.containsKey("mall-web")) {
+            // 前端成功页文案可与后端契约并行：清掉硬边，强制 parallel，避免无谓串行拉长关键路径
             MutableTask web = draftByService.get("mall-web");
             web.dependsOn.clear();
             web.executionMode = "parallel";
@@ -525,6 +532,7 @@ public class AgentPlannerService {
         }
 
         if (!tasks.isEmpty()) {
+            // 总是追加全局验收节点：依赖全部改造任务，提醒联调通知送达与界面表现
             List<Long> dependsOnAll = tasks.stream().map(DomainModels.AgentTask::taskId).toList();
             tasks.add(new DomainModels.AgentTask(
                     appDataStore.nextAgentTaskId(),
@@ -783,7 +791,7 @@ public class AgentPlannerService {
             if (fromId == null || toId == null) {
                 continue;
             }
-            // mall-web 展示依赖允许不挂硬边
+            // mall-web 展示/配置依赖允许不挂硬边：前端可与后端并行，校验时不因缺边判失败
             if ("mall-web".equals(edge.toServiceCode())) {
                 continue;
             }

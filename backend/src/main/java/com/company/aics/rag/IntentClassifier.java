@@ -64,6 +64,7 @@ public class IntentClassifier {
             String raw = chatClient.classifyCustomerIntent(text);
             String label = parseLlmLabel(raw);
             if (label != null) {
+                // 固定高置信分：表示「LLM 成功解析」，与规则路径的 /3.0 置信度不可直接横向比较
                 return new IntentResult(label, 0.92, "llm:" + abbreviate(raw));
             }
             log.warn("LLM intent response unparseable, fallback to rules. raw={}", abbreviate(raw));
@@ -131,6 +132,9 @@ public class IntentClassifier {
 
     /**
      * 关键词/正则规则降级路径（LLM 不可用或输出非法时使用）。
+     * <p>
+     * 权重约定：投诉略高（1.2）以免被售后词淹没；闲聊略低（0.9）避免寒暄冲掉业务意图。
+     * 无任何业务命中时默认闲聊——宁可跳过检索，也不要把无关闲聊灌进知识库。
      */
     IntentResult classifyByRules(String question) {
         String text = question.trim();
@@ -215,6 +219,7 @@ public class IntentClassifier {
         }
 
         List<String> matched = hits.getOrDefault(best, List.of());
+        // /3.0：约命中 3 个加权关键词即接近满分，避免无限累加
         double confidence = Math.min(1.0, bestScore / 3.0);
         return new IntentResult(best, confidence, summarizeHits(matched));
     }
@@ -244,6 +249,10 @@ public class IntentClassifier {
         }
     }
 
+    /**
+     * 同分时的业务优先级：投诉 > 售后 > 产品 > 闲聊。
+     * 客服场景宁可将边界问题当投诉/售后处理，避免漏识别高风险情绪。
+     */
     private int priorityRank(String label) {
         return switch (label) {
             case COMPLAINT -> 4;

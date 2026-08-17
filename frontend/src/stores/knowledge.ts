@@ -23,7 +23,7 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     }
   }
 
-  /** 若存在处理中文档则轮询刷新列表 */
+  /** 若存在 processing 文档则每 1.5s 轮询，对齐后端异步向量化状态流转；请求失败立即停，避免坏会话刷屏 */
   function startPollingIfNeeded() {
     stopPolling()
     if (!documents.value.some(item => item.status === "processing")) {

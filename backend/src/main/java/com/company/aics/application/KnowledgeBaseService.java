@@ -116,7 +116,7 @@ public class KnowledgeBaseService {
             return failed;
         }
 
-        List<String> chunks = splitText(content, 520, 80);
+        List<String> chunks = splitText(content, 520, 80); // 块长/重叠见 splitText 注释
         if (chunks.isEmpty()) {
             chunks = List.of("该文档没有可解析的文本内容。");
         }
@@ -230,6 +230,7 @@ public class KnowledgeBaseService {
     /**
      * 多知识库自动路由：在客服类知识库（无则全部库）中探测检索，返回最高分知识库 ID。
      * 均无命中时回退到配置的默认客服知识库。
+     * 探测 Top-K 上限为 3：路由只需比较各库最高分，不必拉满完整检索以控制延迟。
      */
     public Long resolveBestKnowledgeBaseId(String question, int topK) {
         List<DomainModels.KnowledgeBase> all = appDataStore.listKnowledgeBases();
@@ -242,6 +243,7 @@ public class KnowledgeBaseService {
 
         Long bestId = aiProperties.getDefaultSupportKbId();
         double bestScore = -1.0;
+        // 路由探测取 min(3, topK)：够比较库间相关性，避免每个库都跑满 RAG Top-K
         int probeK = Math.max(1, Math.min(3, topK));
         for (DomainModels.KnowledgeBase kb : candidates) {
             List<SearchHit> hits = searchSupportChunks(kb.id(), question, probeK);
@@ -404,6 +406,8 @@ public class KnowledgeBaseService {
 
     /**
      * 按段落聚合切块，超长块再按窗口滑动切分，保留 overlap 字符重叠。
+     * 默认约 520 字/块、80 字重叠：兼顾常见 Embedding 上下文长度与跨句语义连续性，
+     * 避免政策条件被切到块边界后检索漏命中。
      */
     private List<String> splitText(String text, int chunkSize, int overlap) {
         List<String> paragraphs = new ArrayList<>();
@@ -466,7 +470,8 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 关键词回退打分：正文/文件名/服务码命中加权，并对退货退款等主题加分。
+     * 关键词回退打分：正文命中权重最高（0.65），文件名次之（0.25），服务码再次（0.35）；
+     * policy 文档额外 +0.15；同现退货/退款等主题词 +0.4，弥补无向量时的语义缺口。
      */
     private double score(
             String query,
@@ -565,6 +570,7 @@ public class KnowledgeBaseService {
 
     /**
      * 根据文件名与正文启发式推断微服务编码。
+     * 供技术文档入库时写入 metadata，Agent 检索可按 serviceCode 过滤影响面。
      */
     private String inferServiceCode(String fileName, String content) {
         String joined = (fileName + "\n" + content).toLowerCase();
