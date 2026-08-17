@@ -2,15 +2,31 @@
  * 前后端共享的视图模型类型定义：登录、会话、知识库、管理看板与 Agent 规划等接口的响应结构。
  */
 
-/** 当前登录用户的展示信息 */
+/** 当前登录用户的展示信息（邮箱/手机取决于注册方式，可为空） */
 export interface UserView {
   id: number
   displayName: string
-  email: string
+  /** 邮箱注册用户；手机注册通常为空 */
+  email?: string | null
+  /** 手机注册用户；邮箱注册通常为空 */
   phone?: string | null
 }
 
-/** 登录/注册成功后的令牌与用户信息（含 Refresh） */
+/**
+ * 注册成功响应：不签发令牌。
+ * alreadyRegistered=true 表示幂等命中（重复提交同一账号+正确密码），未新建用户。
+ * 前端应提示 message 并切回登录页，不可当作已登录。
+ */
+export interface RegisterResponse {
+  userId: number
+  displayName: string
+  registerType: "EMAIL" | "PHONE" | string
+  message: string
+  /** 幂等命中：账号已存在且密码正确 */
+  alreadyRegistered?: boolean
+}
+
+/** 登录成功后的令牌与用户信息（含 Refresh；注册接口不会返回本结构） */
 export interface LoginResponse {
   accessToken: string
   tokenType: string

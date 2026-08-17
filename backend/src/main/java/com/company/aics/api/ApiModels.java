@@ -1,7 +1,6 @@
 package com.company.aics.api;
 
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -22,32 +21,55 @@ public final class ApiModels {
     private ApiModels() {
     }
 
-    /** 用户注册请求。 */
+    /**
+     * 用户注册请求：EMAIL 与 PHONE 二选一，不可混填。
+     * 邮箱注册时 email 须为常见后缀（qq/163/gmail 等）；phone 须为空。
+     */
     public record RegisterRequest(
-            @Email @NotBlank String email,
+            /** 注册方式：EMAIL 或 PHONE。 */
+            @NotBlank @Size(max = 16) String registerType,
+            /** 邮箱（仅 EMAIL 注册填写）。 */
+            String email,
+            /** 手机号（仅 PHONE 注册填写，1 开头 11 位）。 */
             String phone,
             @NotBlank @Size(min = 8, max = 64) String password,
+            /** 昵称（全局唯一）。 */
             @NotBlank @Size(max = 64) String displayName
     ) {
     }
 
-    /** 登录请求（账号可为邮箱或手机号）。 */
+    /** 注册成功响应（不签发令牌，需返回登录页自行登录）。 */
+    public record RegisterResponse(
+            Long userId,
+            String displayName,
+            /** 实际使用的注册方式 EMAIL / PHONE。 */
+            String registerType,
+            /** 前端展示文案，如「已注册，请返回登录页登录。」 */
+            String message,
+            /** true=幂等命中（账号已存在且密码正确），未新建用户。 */
+            boolean alreadyRegistered
+    ) {
+    }
+
+    /** 登录请求（账号为允许后缀的邮箱，或 11 位手机号）。 */
     public record LoginRequest(
             @NotBlank String account,
             @NotBlank String password
     ) {
     }
 
-    /** 对外用户视图（不含密码哈希）。 */
+    /** 对外用户视图（不含密码哈希；邮箱/手机可为空取决于注册方式）。 */
     public record UserView(
             Long id,
             String displayName,
+            /** 邮箱注册用户有值；手机注册通常为 null。 */
             String email,
+            /** 手机注册用户有值；邮箱注册通常为 null。 */
             String phone
     ) {
     }
 
-    /** 登录/注册成功响应：短效 Access + 可轮换 Refresh。 */
+    /** 登录成功响应：短效 Access + 可轮换 Refresh。 */
     public record LoginResponse(
             String accessToken,
             String tokenType,

@@ -243,6 +243,21 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /**
+   * 切换用户时清空会话态，避免串到上一用户页面数据。
+   * 由 authStore.login / logout 调用。
+   */
+  function resetSession() {
+    knowledgeBases.value = []
+    conversations.value = []
+    currentConversation.value = null
+    activeKbId.value = 0
+    streaming.value = false
+    streamDraft.value = null
+    latestFollowUpSuggestions.value = []
+    loading.value = false
+  }
+
   return {
     knowledgeBases,
     conversations,
@@ -257,6 +272,7 @@ export const useChatStore = defineStore("chat", () => {
     createNewConversation,
     selectConversation,
     sendQuestion,
-    giveFeedback
+    giveFeedback,
+    resetSession
   }
 })

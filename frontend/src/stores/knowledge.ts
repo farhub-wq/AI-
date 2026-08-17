@@ -98,6 +98,18 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     startPollingIfNeeded()
   }
 
+  /**
+   * 切换用户时清空知识库页面缓存并停止轮询。
+   * 由 authStore.login / logout 调用。
+   */
+  function resetSession() {
+    stopPolling()
+    knowledgeBases.value = []
+    selectedKbId.value = null
+    documents.value = []
+    loading.value = false
+  }
+
   return {
     knowledgeBases,
     selectedKbId,
@@ -107,6 +119,7 @@ export const useKnowledgeStore = defineStore("knowledge", () => {
     selectKnowledgeBase,
     addKnowledgeBase,
     addDocument,
-    removeDocument
+    removeDocument,
+    resetSession
   }
 })

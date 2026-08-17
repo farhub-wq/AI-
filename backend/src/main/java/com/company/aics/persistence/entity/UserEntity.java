@@ -9,7 +9,9 @@ import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 
 /**
- * 用户表实体（{@code users}）：邮箱/手机登录、密码哈希与展示名。
+ * 用户表实体（{@code users}）：邮箱/手机分开注册登录、密码哈希与展示名。
+ * <p>
+ * 唯一性：{@code email}、{@code phone}、{@code display_name} 各自唯一（email/phone 可空，二选一必填由业务保证）。
  */
 @Entity
 @Table(name = "users")
@@ -20,11 +22,11 @@ public class UserEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** 登录邮箱（唯一）。 */
-    @Column(nullable = false, unique = true, length = 128)
+    /** 登录邮箱（邮箱注册必填；手机注册可为空）。 */
+    @Column(unique = true, length = 128)
     private String email;
 
-    /** 手机号（可选、唯一）。 */
+    /** 手机号（手机注册必填、唯一；邮箱注册可为空）。 */
     @Column(unique = true, length = 32)
     private String phone;
 
@@ -32,8 +34,8 @@ public class UserEntity {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
-    /** 对外展示名称。 */
-    @Column(name = "display_name", nullable = false, length = 64)
+    /** 对外展示名称（全局唯一，不可与其他用户重复）。 */
+    @Column(name = "display_name", nullable = false, unique = true, length = 64)
     private String displayName;
 
     /** 账号状态（1=正常）。 */

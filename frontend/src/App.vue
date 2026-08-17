@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { useAuthStore } from "@/stores/auth"
+import { hasValidSession } from "@/router"
 
 /**
- * 应用根布局：登录页全屏展示；其余路由使用侧栏壳（导航、用户信息、退出）。
+ * 应用根布局：登录页全屏展示；其余路由仅在已登录时渲染侧栏壳。
+ * 未登录绝不展示功能页壳，由路由守卫 + 本处双重拦截。
  */
 
 const route = useRoute()
@@ -18,25 +20,44 @@ const menuItems = [
   { label: "需求拆解 Agent", path: "/agent" }
 ]
 
-/** 登录页不展示侧栏壳，其它页面展示 */
-const showShell = computed(() => route.path !== "/login")
+/** 是否已登录（内存 token 或双令牌本地会话） */
+const isLoggedIn = computed(() => {
+  return Boolean(authStore.accessToken) && hasValidSession()
+})
+
+/** 路由变化时再兜底：未登录却落到非登录路径 → 强制跳登录 */
+watch(
+  () => route.fullPath,
+  () => {
+    if (route.path !== "/login" && !hasValidSession()) {
+      router.replace({ path: "/login", query: { redirect: route.fullPath } })
+    }
+  },
+  { immediate: true }
+)
 
 /** 侧栏导航跳转 */
 function go(path: string) {
+  if (!hasValidSession()) {
+    router.replace("/login")
+    return
+  }
   router.push(path)
 }
 
 /** 退出登录并回到登录页 */
-function logout() {
-  authStore.logout()
-  router.push("/login")
+async function logout() {
+  await authStore.logout()
+  router.replace("/login")
 }
 </script>
 
 <template>
-  <router-view v-if="!showShell" />
+  <!-- 登录页：全屏，不挂功能壳 -->
+  <router-view v-if="route.path === '/login'" />
 
-  <div v-else class="page-shell">
+  <!-- 已登录：功能页壳；未登录时不渲染任何功能组件（守卫会 replace 到 /login） -->
+  <div v-else-if="isLoggedIn" class="page-shell">
     <div class="app-shell glass-panel">
       <aside class="shell-sidebar">
         <div class="brand-block">
@@ -60,7 +81,7 @@ function logout() {
           <div class="user-block">
             <span class="badge-soft">当前账号</span>
             <strong>{{ authStore.currentUser?.displayName ?? "未登录" }}</strong>
-            <span>{{ authStore.currentUser?.email ?? "demo@example.com" }}</span>
+            <span>{{ authStore.currentUser?.email ?? authStore.currentUser?.phone ?? "未登录" }}</span>
           </div>
           <el-button type="primary" plain @click="logout">退出登录</el-button>
         </div>

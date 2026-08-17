@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
-import type { LoginResponse, UserView } from "@/api/types"
+import type { LoginResponse, RegisterResponse, UserView } from "@/api/types"
 import {
   getCurrentUser,
   login as loginApi,
@@ -8,9 +8,14 @@ import {
   register as registerApi
 } from "@/api/auth"
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, USER_KEY } from "@/api/client"
+import { useChatStore } from "@/stores/chat"
+import { useAgentStore } from "@/stores/agent"
+import { useAdminStore } from "@/stores/admin"
+import { useKnowledgeStore } from "@/stores/knowledge"
 
 /**
  * 认证状态：Access（短效 JWT）+ Refresh（可轮换），持久化到 localStorage。
+ * 登录/登出时清空各业务 Store，避免不同用户看到上一用户的前端缓存页面数据。
  */
 
 export const useAuthStore = defineStore("auth", () => {
@@ -18,14 +23,19 @@ export const useAuthStore = defineStore("auth", () => {
   const currentUser = ref<UserView | null>(readUser())
   const loading = ref(false)
 
-  /** 登录：先清残留 token，再请求并落盘 Access/Refresh */
+  /**
+   * 登录：先清残留 token 与业务态，再请求并落盘 Access/Refresh。
+   * 保证切换账号后不会残留上一用户的会话/规划等前端状态。
+   */
   async function login(account: string, password: string) {
     loading.value = true
     try {
-      // 清掉旧密钥轮换前的残留 token，避免路由误判已登录
+      clearSessionCaches()
       localStorage.removeItem(ACCESS_TOKEN_KEY)
       localStorage.removeItem(REFRESH_TOKEN_KEY)
+      localStorage.removeItem(USER_KEY)
       accessToken.value = null
+      currentUser.value = null
       const result = await loginApi(account, password)
       applyLoginResult(result)
       return result
@@ -34,18 +44,21 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  /** 注册成功后同样写入双令牌 */
+  /**
+   * 注册：仅调用接口拿提示文案，绝不写入令牌、绝不视为已登录。
+   * 后端保证邮箱/手机/昵称唯一；重复提交同一账号+正确密码为幂等成功。
+   * 前端应提示「已注册，请返回登录页登录」。
+   */
   async function register(payload: {
-    email: string
+    registerType: "EMAIL" | "PHONE"
+    email?: string
     phone?: string
     password: string
     displayName: string
-  }) {
+  }): Promise<RegisterResponse> {
     loading.value = true
     try {
-      const result = await registerApi(payload)
-      applyLoginResult(result)
-      return result
+      return await registerApi(payload)
     } finally {
       loading.value = false
     }
@@ -71,19 +84,20 @@ export const useAuthStore = defineStore("auth", () => {
     localStorage.setItem(USER_KEY, JSON.stringify(result.user))
   }
 
-  /** 先请求后端吊销 Refresh，再清空本地态 */
+  /** 先请求后端吊销 Refresh，再清空本地态与业务缓存 */
   async function logout() {
     const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
     try {
       await logoutApi(refreshToken)
     } catch {
-      // 即使吊销失败也清理本地态
+      // 即使吊销失败也清理本地态，避免残留登录态
     }
     accessToken.value = null
     currentUser.value = null
     localStorage.removeItem(ACCESS_TOKEN_KEY)
     localStorage.removeItem(REFRESH_TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    clearSessionCaches()
   }
 
   return {
@@ -96,6 +110,17 @@ export const useAuthStore = defineStore("auth", () => {
     logout
   }
 })
+
+/**
+ * 清空对话 / Agent / 看板 / 知识库前端缓存。
+ * 防止用户 A 登出后用户 B 仍短暂看到 A 的页面数据。
+ */
+function clearSessionCaches() {
+  useChatStore().resetSession()
+  useAgentStore().resetSession()
+  useAdminStore().resetSession()
+  useKnowledgeStore().resetSession()
+}
 
 /** 从 localStorage 安全解析已缓存的用户对象 */
 function readUser(): UserView | null {

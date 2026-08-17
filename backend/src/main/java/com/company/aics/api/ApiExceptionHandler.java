@@ -3,6 +3,7 @@ package com.company.aics.api;
 import com.company.aics.application.DailyQuestionLimitExceededException;
 import com.company.aics.rag.AiServiceException;
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -12,7 +13,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
  * 全局异常处理：将业务与校验异常映射为统一 {@link ApiEnvelope} 与对应 HTTP 状态码。
- * 覆盖日提问限流、AI 上游错误、参数非法、Bean/约束校验失败及未捕获异常。
+ * 覆盖日提问限流、AI 上游错误、参数非法、唯一约束冲突、Bean/约束校验失败及未捕获异常。
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -52,6 +53,30 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiEnvelope<Void>> handleIllegalArgument(IllegalArgumentException ex) {
         return ResponseEntity.badRequest().body(ApiEnvelope.failure(4001, ex.getMessage()));
+    }
+
+    /**
+     * 数据库唯一约束冲突（邮箱/手机/昵称并发注册等）→ HTTP 400，业务码 4004。
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiEnvelope<Void>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        String raw = ex.getMostSpecificCause() == null ? "" : ex.getMostSpecificCause().getMessage();
+        String lower = raw == null ? "" : raw.toLowerCase();
+        // 根据索引名/字段名给出更可读提示（MySQL 报错常含 uk_users_*）
+        if (lower.contains("display_name") || lower.contains("uk_users_display_name")) {
+            return ResponseEntity.badRequest()
+                    .body(ApiEnvelope.failure(4004, "该昵称已被使用，请更换昵称。"));
+        }
+        if (lower.contains("email") || lower.contains("uk_users_email")) {
+            return ResponseEntity.badRequest()
+                    .body(ApiEnvelope.failure(4004, "该邮箱已注册。"));
+        }
+        if (lower.contains("phone") || lower.contains("uk_users_phone")) {
+            return ResponseEntity.badRequest()
+                    .body(ApiEnvelope.failure(4004, "该手机号已注册。"));
+        }
+        return ResponseEntity.badRequest()
+                .body(ApiEnvelope.failure(4004, "注册失败：邮箱、手机号或昵称可能已被占用。"));
     }
 
     /**

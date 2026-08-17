@@ -1,4 +1,4 @@
-﻿# 前端启动说明
+# 前端启动说明
 
 ## 技术栈
 
@@ -30,4 +30,4 @@ VITE_API_BASE_URL=http://localhost:8080/api/v1
 
 ## 演示账号
 
-`demo@example.com` / `Passw0rd!`
+`demo@qq.com` / `Passw0rd!`

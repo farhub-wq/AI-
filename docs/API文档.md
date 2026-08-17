@@ -1,4 +1,4 @@
-﻿# API文档
+# API文档
 
 > Base URL：`http://localhost:8080/api/v1`  
 > 认证：`Authorization: Bearer <accessToken>`（除注册/登录外）  
@@ -22,33 +22,61 @@
 
 ### 1.2 演示账号
 
-- 账号：`demo@example.com` 或手机号 `13800138000`
+- 账号：`demo@qq.com` 或手机号 `13800138000`
 - 密码：`Passw0rd!`
 
 ---
 
 ## 2. 鉴权（Read.md 必含：登录）
 
-### 2.1 注册
+### 2.1 注册（邮箱 / 手机号分开，成功后不自动登录）
 
 `POST /auth/register`
 
+邮箱注册（勿传 `phone`；邮箱须为常见后缀如 `@qq.com` / `@163.com` / `@gmail.com`）：
+
 ```json
 {
-  "email": "demo@example.com",
-  "phone": "13800138000",
+  "registerType": "EMAIL",
+  "email": "newuser@qq.com",
   "password": "Passw0rd!",
-  "displayName": "演示用户"
+  "displayName": "新用户"
 }
 ```
 
-### 2.2 登录
+手机号注册（勿传 `email`；手机号须为 `1` 开头共 11 位）：
+
+```json
+{
+  "registerType": "PHONE",
+  "phone": "13900139000",
+  "password": "Passw0rd!",
+  "displayName": "新用户"
+}
+```
+
+响应 `data` 示例（无令牌）：
+
+```json
+{
+  "userId": 2,
+  "displayName": "新用户",
+  "registerType": "EMAIL",
+  "message": "已注册，请返回登录页登录。",
+  "alreadyRegistered": false
+}
+```
+
+说明：
+- 邮箱白名单含 `qq.com`、`163.com`、`126.com`、`gmail.com`、`foxmail.com`、`outlook.com`、`hotmail.com`、`sina.com`、`yeah.net`。
+- **唯一性**：邮箱、手机号、昵称（`displayName`）均唯一。
+- **幂等**：同一邮箱/手机 + 正确密码重复注册时 `alreadyRegistered=true`，不新建用户，文案仍为「已注册，请返回登录页登录。」；密码不对则报「该邮箱/手机号已注册」。### 2.2 登录
 
 `POST /auth/login`
 
 ```json
 {
-  "account": "demo@example.com",
+  "account": "demo@qq.com",
   "password": "Passw0rd!"
 }
 ```
@@ -65,7 +93,7 @@
   "user": {
     "id": 1,
     "displayName": "演示用户",
-    "email": "demo@example.com",
+    "email": "demo@qq.com",
     "phone": "13800138000"
   }
 }

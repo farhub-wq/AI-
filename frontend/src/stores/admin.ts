@@ -32,12 +32,25 @@ export const useAdminStore = defineStore("admin", () => {
     }
   }
 
+  /**
+   * 切换用户时清空看板缓存。
+   * 由 authStore.login / logout 调用。
+   */
+  function resetSession() {
+    overview.value = null
+    feedbackMetrics.value = null
+    conversations.value = []
+    dailyQuestions.value = []
+    loading.value = false
+  }
+
   return {
     overview,
     feedbackMetrics,
     conversations,
     dailyQuestions,
     loading,
+    resetSession,
     bootstrap
   }
 })

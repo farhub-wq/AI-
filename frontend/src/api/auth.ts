@@ -1,8 +1,11 @@
-import type { LoginResponse, UserView } from "./types"
+import type { LoginResponse, RegisterResponse, UserView } from "./types"
 import { request } from "./client"
 
 /**
- * 认证相关 API：登录、注册、当前用户、登出吊销 Refresh。
+ * 认证相关 API：
+ * - 登录：常见后缀邮箱或手机号
+ * - 注册：EMAIL / PHONE 分开，成功不返回令牌（需自行登录）
+ * - 登出：吊销服务端 Refresh
  */
 
 /** 使用邮箱/手机号与密码登录，返回 Access + Refresh */
@@ -16,14 +19,20 @@ export function login(account: string, password: string) {
   })
 }
 
-/** 注册新账号，成功后同样返回双令牌 */
+/**
+ * 分开注册（勿混填邮箱与手机）。
+ * registerType=EMAIL 时仅传 email；=PHONE 时仅传 phone。
+ * 成功返回 RegisterResponse（含 alreadyRegistered 幂等标记），不签发 token。
+ * 邮箱/手机/昵称后端保证唯一；同一账号+正确密码重复提交为幂等成功。
+ */
 export function register(payload: {
-  email: string
+  registerType: "EMAIL" | "PHONE"
+  email?: string
   phone?: string
   password: string
   displayName: string
 }) {
-  return request<LoginResponse>("/auth/register", {
+  return request<RegisterResponse>("/auth/register", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"

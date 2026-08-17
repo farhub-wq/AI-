@@ -99,20 +99,27 @@ public class AppDataStore {
         return userRepository.findFirstByEmailOrPhoneOrderByIdAsc(account, account).map(mapper::toUser);
     }
 
-    /** 邮箱是否已注册。 */
+    /** 邮箱是否已注册（唯一）。 */
     @Transactional(readOnly = true)
     public boolean emailExists(String email) {
         return userRepository.existsByEmail(email);
     }
 
-    /** 手机号是否已注册。 */
+    /** 手机号是否已注册（唯一）。 */
     @Transactional(readOnly = true)
     public boolean phoneExists(String phone) {
         return userRepository.existsByPhone(phone);
     }
 
+    /** 昵称是否已被占用（唯一）。 */
+    @Transactional(readOnly = true)
+    public boolean displayNameExists(String displayName) {
+        return userRepository.existsByDisplayName(displayName);
+    }
+
     /**
      * 新建或更新用户；id 为空则新建实体。
+     * 邮箱 / 手机号 / 昵称在库表层有唯一索引，并发下可能抛出约束冲突。
      */
     @Transactional
     public DomainModels.User saveUser(DomainModels.User user) {

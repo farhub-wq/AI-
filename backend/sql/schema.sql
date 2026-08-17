@@ -1,11 +1,16 @@
+-- 用户表：邮箱注册与手机号注册分开（email/phone 二选一可空）
+-- 唯一性：email、phone、display_name 各自唯一（支撑幂等注册与防重复账号）
 CREATE TABLE users (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  email VARCHAR(128) NOT NULL,
-  phone VARCHAR(32) NULL,
+  email VARCHAR(128) NULL,              -- 邮箱注册必填；常见后缀由业务校验；唯一
+  phone VARCHAR(32) NULL,               -- 手机注册必填；1 开头 11 位由业务校验；唯一
   password_hash VARCHAR(255) NOT NULL,
-  display_name VARCHAR(64) NOT NULL,
+  display_name VARCHAR(64) NOT NULL,    -- 昵称全局唯一
   status TINYINT NOT NULL DEFAULT 1,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_users_email (email),
+  UNIQUE KEY uk_users_phone (phone),
+  UNIQUE KEY uk_users_display_name (display_name)
 );
 
 CREATE TABLE conversations (

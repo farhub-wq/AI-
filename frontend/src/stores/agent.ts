@@ -58,6 +58,17 @@ export const useAgentStore = defineStore("agent", () => {
     currentPlan.value = await getAgentPlan(planId)
   }
 
+  /**
+   * 切换用户时清空规划缓存。
+   * 由 authStore.login / logout 调用，保证 Agent 页不串用户。
+   */
+  function resetSession() {
+    serviceCatalog.value = []
+    planHistory.value = []
+    currentPlan.value = null
+    submitting.value = false
+  }
+
   return {
     serviceCatalog,
     planHistory,
@@ -65,6 +76,7 @@ export const useAgentStore = defineStore("agent", () => {
     submitting,
     bootstrap,
     submitRequirement,
-    selectPlan
+    selectPlan,
+    resetSession
   }
 })

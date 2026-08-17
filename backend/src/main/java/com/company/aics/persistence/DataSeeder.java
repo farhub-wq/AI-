@@ -61,9 +61,10 @@ public class DataSeeder implements ApplicationRunner {
         }
 
         log.info("Seeding MySQL demo data...");
+        // 演示账号邮箱使用允许后缀 @qq.com（与注册白名单一致；也可用手机号 13800138000 登录）
         DomainModels.User demoUser = appDataStore.saveUser(new DomainModels.User(
                 null,
-                "demo@example.com",
+                "demo@qq.com",
                 "13800138000",
                 passwordEncoder.encode("Passw0rd!"),
                 "演示用户",
