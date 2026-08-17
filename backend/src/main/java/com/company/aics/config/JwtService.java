@@ -3,79 +3,72 @@ package com.company.aics.config;
 import com.company.aics.domain.DomainModels;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
-import jakarta.annotation.PostConstruct;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
-import javax.crypto.SecretKey;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
- * JWT 签发与解析：以用户 id 为 subject，附带 displayName；HMAC 签名。
- * 供登录/注册签发访问令牌，以及过滤器校验并还原 {@link AuthenticatedUser}。
+ * Access JWT 签发与解析（短效）。
+ * Refresh Token 不在本类签发，由 {@link com.company.aics.application.AuthService} 以不透明串+库表哈希管理。
  */
 @Service
 public class JwtService {
 
     private final JwtProperties jwtProperties;
-    private SecretKey secretKey;
+    private final JwtKeyProvider jwtKeyProvider;
 
     /**
-     * @param jwtProperties JWT 密钥与有效期配置
+     * @param jwtProperties   Access/Refresh 有效期等配置
+     * @param jwtKeyProvider  文件型 HMAC 密钥
      */
-    public JwtService(JwtProperties jwtProperties) {
+    public JwtService(JwtProperties jwtProperties, JwtKeyProvider jwtKeyProvider) {
         this.jwtProperties = jwtProperties;
+        this.jwtKeyProvider = jwtKeyProvider;
     }
 
     /**
-     * 根据配置密钥初始化 HMAC 签名密钥。
-     */
-    @PostConstruct
-    void init() {
-        this.secretKey = Keys.hmacShaKeyFor(jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8));
-    }
-
-    /**
-     * 为登录/注册成功的用户签发访问令牌。
-     *
-     * @param user 已认证用户领域对象
-     * @return 紧凑格式 JWT 字符串
+     * 签发短效 Access Token：subject=用户 id，claim typ=access，带 jti 便于审计。
      */
     public String createAccessToken(DomainModels.User user) {
         Instant now = Instant.now();
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(String.valueOf(user.id()))
                 .claim("displayName", user.displayName())
+                .claim("typ", "access")
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plus(Duration.ofMinutes(jwtProperties.getAccessTokenMinutes()))))
-                .signWith(secretKey)
+                .signWith(jwtKeyProvider.secretKey())
                 .compact();
     }
 
     /**
-     * 校验签名后还原为 {@link AuthenticatedUser}；失败由调用方捕获。
-     *
-     * @param token Bearer 令牌原文（不含前缀）
-     * @return 解析出的认证主体
+     * 验签并解析 Access Token；拒绝非 access 类型令牌。
      */
     public AuthenticatedUser parseAccessToken(String token) {
         Claims claims = Jwts.parser()
-                .verifyWith(secretKey)
+                .verifyWith(jwtKeyProvider.secretKey())
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
+        if (!"access".equals(claims.get("typ", String.class))) {
+            throw new IllegalArgumentException("不是访问令牌。");
+        }
         return new AuthenticatedUser(
                 Long.parseLong(claims.getSubject()),
                 claims.get("displayName", String.class)
         );
     }
 
-    /**
-     * @return 访问令牌有效期对应的秒数，供登录响应返回
-     */
-    public long getExpiresInSeconds() {
+    /** @return Access Token 有效期（秒），写入登录响应 expiresIn */
+    public long getAccessExpiresInSeconds() {
         return Duration.ofMinutes(jwtProperties.getAccessTokenMinutes()).toSeconds();
+    }
+
+    /** @return Refresh Token TTL，供落库 expires_at 使用 */
+    public Duration refreshTokenTtl() {
+        return Duration.ofDays(jwtProperties.getRefreshTokenDays());
     }
 }

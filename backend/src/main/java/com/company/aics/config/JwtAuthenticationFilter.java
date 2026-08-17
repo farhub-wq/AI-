@@ -16,14 +16,23 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * JWT 认证过滤器：从 Authorization Bearer 解析令牌并写入 SecurityContext；无效令牌直接返回 401 JSON。
- * 对登录、Swagger、健康检查等公开路径跳过过滤。
+ * JWT 认证过滤器：从 Authorization Bearer 解析 Access Token 并写入 SecurityContext；无效则 401。
+ * <p>
+ * 仅跳过 register/login/refresh/logout 等公开认证接口；{@code /auth/me} 仍需解析 JWT。
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    /** 无需携带 Access Token 的精确路径。 */
+    private static final List<String> SKIP_EXACT = List.of(
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout"
+    );
+
+    /** 文档与健康检查前缀。 */
     private static final List<String> SKIP_PREFIXES = List.of(
-            "/api/v1/auth/",
             "/swagger-ui",
             "/v3/api-docs",
             "/actuator/health"
@@ -47,6 +56,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
+        if (SKIP_EXACT.stream().anyMatch(path::equals)) {
+            return true;
+        }
         return SKIP_PREFIXES.stream().anyMatch(path::startsWith);
     }
 

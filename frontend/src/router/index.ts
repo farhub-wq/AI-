@@ -1,12 +1,13 @@
 import { createRouter, createWebHistory } from "vue-router"
-import LoginView from "../views/LoginView.vue"
-import ChatView from "../views/ChatView.vue"
-import KnowledgeBaseView from "../views/KnowledgeBaseView.vue"
-import AdminDashboardView from "../views/AdminDashboardView.vue"
-import AgentDecomposeView from "../views/AgentDecomposeView.vue"
+import LoginView from "@/views/LoginView.vue"
+import ChatView from "@/views/ChatView.vue"
+import KnowledgeBaseView from "@/views/KnowledgeBaseView.vue"
+import AdminDashboardView from "@/views/AdminDashboardView.vue"
+import AgentDecomposeView from "@/views/AgentDecomposeView.vue"
+import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from "@/api/client"
 
 /**
- * 前端路由表与登录守卫：未登录跳转登录页，已登录访问登录页则回对话页。
+ * 前端路由表与登录守卫（配合短效 Access + Refresh）。
  */
 
 const router = createRouter({
@@ -21,15 +22,23 @@ const router = createRouter({
   ]
 })
 
-/** 基于本地 access token 做简单鉴权跳转 */
+/**
+ * 鉴权跳转：
+ * - 无 Access → 强制登录页
+ * - 进登录页但仅有废 Access、无 Refresh → 清 Access 并允许留在登录页
+ * - 双令牌齐全再进登录页 → 视为已登录，跳对话页
+ */
 router.beforeEach((to) => {
-  const token = localStorage.getItem("aics_access_token")
-  // 访问受保护路由且无 token → 登录页
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY)
   if (to.path !== "/login" && !token) {
     return "/login"
   }
-  // 已登录再进登录页 → 直接进对话
   if (to.path === "/login" && token) {
+    const refresh = localStorage.getItem(REFRESH_TOKEN_KEY)
+    if (!refresh) {
+      localStorage.removeItem(ACCESS_TOKEN_KEY)
+      return true
+    }
     return "/chat"
   }
   return true

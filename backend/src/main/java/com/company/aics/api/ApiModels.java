@@ -47,12 +47,26 @@ public final class ApiModels {
     ) {
     }
 
-    /** 登录/注册成功响应：访问令牌与用户信息。 */
+    /** 登录/注册成功响应：短效 Access + 可轮换 Refresh。 */
     public record LoginResponse(
             String accessToken,
             String tokenType,
             long expiresIn,
+            String refreshToken,
+            long refreshExpiresIn,
             UserView user
+    ) {
+    }
+
+    /** 刷新令牌请求：提交旧 Refresh，换取新令牌对。 */
+    public record RefreshTokenRequest(
+            @NotBlank String refreshToken
+    ) {
+    }
+
+    /** 登出请求：携带 Refresh 以便服务端吊销。 */
+    public record LogoutRequest(
+            String refreshToken
     ) {
     }
 

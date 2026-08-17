@@ -1,24 +1,31 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
 import type { LoginResponse, UserView } from "@/api/types"
-import { getCurrentUser, login as loginApi, register as registerApi } from "@/api/auth"
+import {
+  getCurrentUser,
+  login as loginApi,
+  logout as logoutApi,
+  register as registerApi
+} from "@/api/auth"
+import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, USER_KEY } from "@/api/client"
 
 /**
- * 认证状态：维护 accessToken / 当前用户，登录注册后持久化到 localStorage。
+ * 认证状态：Access（短效 JWT）+ Refresh（可轮换），持久化到 localStorage。
  */
-
-const ACCESS_TOKEN_KEY = "aics_access_token"
-const USER_KEY = "aics_current_user"
 
 export const useAuthStore = defineStore("auth", () => {
   const accessToken = ref<string | null>(localStorage.getItem(ACCESS_TOKEN_KEY))
   const currentUser = ref<UserView | null>(readUser())
   const loading = ref(false)
 
-  /** 调用登录 API，成功后写入 token 与用户信息 */
+  /** 登录：先清残留 token，再请求并落盘 Access/Refresh */
   async function login(account: string, password: string) {
     loading.value = true
     try {
+      // 清掉旧密钥轮换前的残留 token，避免路由误判已登录
+      localStorage.removeItem(ACCESS_TOKEN_KEY)
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
+      accessToken.value = null
       const result = await loginApi(account, password)
       applyLoginResult(result)
       return result
@@ -27,7 +34,7 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  /** 调用注册 API，成功后同样持久化登录态 */
+  /** 注册成功后同样写入双令牌 */
   async function register(payload: {
     email: string
     phone?: string
@@ -44,9 +51,8 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  /** 有 token 时向后端刷新当前用户资料并写回本地 */
+  /** 有 Access 时向后端刷新当前用户资料 */
   async function refreshCurrentUser() {
-    // 无 token 时跳过，避免无效请求
     if (!accessToken.value) {
       return null
     }
@@ -56,19 +62,27 @@ export const useAuthStore = defineStore("auth", () => {
     return user
   }
 
-  /** 写入 token 与用户信息到内存和本地存储 */
+  /** 写入 Access、Refresh 与用户信息到内存和本地存储 */
   function applyLoginResult(result: LoginResponse) {
     accessToken.value = result.accessToken
     currentUser.value = result.user
     localStorage.setItem(ACCESS_TOKEN_KEY, result.accessToken)
+    localStorage.setItem(REFRESH_TOKEN_KEY, result.refreshToken)
     localStorage.setItem(USER_KEY, JSON.stringify(result.user))
   }
 
-  /** 清空内存与本地登录态 */
-  function logout() {
+  /** 先请求后端吊销 Refresh，再清空本地态 */
+  async function logout() {
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
+    try {
+      await logoutApi(refreshToken)
+    } catch {
+      // 即使吊销失败也清理本地态
+    }
     accessToken.value = null
     currentUser.value = null
     localStorage.removeItem(ACCESS_TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
   }
 
@@ -92,7 +106,6 @@ function readUser(): UserView | null {
   try {
     return JSON.parse(raw) as UserView
   } catch {
-    // 损坏数据视为未登录
     return null
   }
 }

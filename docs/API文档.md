@@ -59,7 +59,9 @@
 {
   "accessToken": "eyJ...",
   "tokenType": "Bearer",
-  "expiresIn": 86400,
+  "expiresIn": 1800,
+  "refreshToken": "url-safe-random...",
+  "refreshExpiresIn": 1209600,
   "user": {
     "id": 1,
     "displayName": "演示用户",
@@ -69,9 +71,29 @@
 }
 ```
 
-### 2.3 当前用户
+说明：Access 默认约 30 分钟；Refresh 约 14 天。HMAC 密钥不在 `.env`，见 `backend/data/jwt.hmac.key`。
 
-`GET /auth/me`
+### 2.3 刷新令牌
+
+`POST /auth/refresh`
+
+```json
+{ "refreshToken": "..." }
+```
+
+返回结构同登录（旧 Refresh 立即作废，实行轮换）。
+
+### 2.4 登出
+
+`POST /auth/logout`
+
+```json
+{ "refreshToken": "..." }
+```
+
+### 2.5 当前用户
+
+`GET /auth/me`（需 Access Bearer）
 
 ---
 

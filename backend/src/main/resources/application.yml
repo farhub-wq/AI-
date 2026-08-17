@@ -37,8 +37,10 @@ springdoc:
 
 security:
   jwt:
-    secret: ${JWT_SECRET:replace-with-a-long-development-secret-key-for-jwt-signing}
-    access-token-minutes: ${JWT_ACCESS_TOKEN_MINUTES:1440}
+    # Access 短效（分钟）；Refresh 见 refresh-token-days。密钥不走 .env，见 JwtKeyProvider。
+    access-token-minutes: 30
+    refresh-token-days: 14
+    key-file: data/jwt.hmac.key
 
 ai:
   llm-base-url: ${LLM_BASE_URL:https://your-llm-provider.example.com/v1}

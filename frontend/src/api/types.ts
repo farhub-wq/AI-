@@ -10,11 +10,15 @@ export interface UserView {
   phone?: string | null
 }
 
-/** 登录/注册成功后的令牌与用户信息 */
+/** 登录/注册成功后的令牌与用户信息（含 Refresh） */
 export interface LoginResponse {
   accessToken: string
   tokenType: string
+  /** Access 有效秒数 */
   expiresIn: number
+  refreshToken: string
+  /** Refresh 有效秒数 */
+  refreshExpiresIn: number
   user: UserView
 }
 

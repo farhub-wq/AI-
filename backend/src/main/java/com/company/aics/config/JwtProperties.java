@@ -3,32 +3,45 @@ package com.company.aics.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * JWT 安全配置（{@code security.jwt.*}）：签名密钥与访问令牌有效期（分钟）。
- * 由 Spring Boot 绑定配置文件中的同名属性，供 {@link JwtService} 使用。
+ * JWT 非密钥配置：有效期与密钥文件路径。
+ * 签名密钥不由 .env / JWT_SECRET 注入，见 {@link JwtKeyProvider}。
  */
 @ConfigurationProperties(prefix = "security.jwt")
 public class JwtProperties {
 
-    private String secret = "replace-with-a-long-development-secret-key-for-jwt-signing";
-    private long accessTokenMinutes = 1440;
+    /** Access Token 有效期（分钟），生产建议 15–60。 */
+    private long accessTokenMinutes = 30;
 
-    /** @return HMAC 签名密钥原文 */
-    public String getSecret() {
-        return secret;
-    }
+    /** Refresh Token 有效期（天）。 */
+    private long refreshTokenDays = 14;
 
-    /** @param secret 设置签名密钥 */
-    public void setSecret(String secret) {
-        this.secret = secret;
-    }
+    /**
+     * HMAC 密钥文件路径（Base64 一行）。
+     * 默认 {@code data/jwt.hmac.key}（相对进程工作目录，通常为 backend/）。
+     */
+    private String keyFile = "data/jwt.hmac.key";
 
-    /** @return 访问令牌有效期（分钟） */
     public long getAccessTokenMinutes() {
         return accessTokenMinutes;
     }
 
-    /** @param accessTokenMinutes 设置访问令牌有效期（分钟） */
     public void setAccessTokenMinutes(long accessTokenMinutes) {
         this.accessTokenMinutes = accessTokenMinutes;
+    }
+
+    public long getRefreshTokenDays() {
+        return refreshTokenDays;
+    }
+
+    public void setRefreshTokenDays(long refreshTokenDays) {
+        this.refreshTokenDays = refreshTokenDays;
+    }
+
+    public String getKeyFile() {
+        return keyFile;
+    }
+
+    public void setKeyFile(String keyFile) {
+        this.keyFile = keyFile;
     }
 }
