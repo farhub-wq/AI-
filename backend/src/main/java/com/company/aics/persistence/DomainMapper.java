@@ -56,12 +56,17 @@ public class DomainMapper {
 
     /** 用户实体 → 领域用户。 */
     public DomainModels.User toUser(UserEntity entity) {
+        String role = entity.getRole();
+        if (role == null || role.isBlank()) {
+            role = DomainModels.UserRole.USER.name();
+        }
         return new DomainModels.User(
                 entity.getId(),
                 entity.getEmail(),
                 entity.getPhone(),
                 entity.getPasswordHash(),
                 entity.getDisplayName(),
+                role,
                 entity.getStatus(),
                 toOffset(entity.getCreatedAt())
         );

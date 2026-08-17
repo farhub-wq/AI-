@@ -6,6 +6,7 @@ CREATE TABLE users (
   phone VARCHAR(32) NULL,               -- 手机注册必填；1 开头 11 位由业务校验；唯一
   password_hash VARCHAR(255) NOT NULL,
   display_name VARCHAR(64) NOT NULL,    -- 昵称全局唯一
+  role VARCHAR(32) NOT NULL DEFAULT 'USER', -- USER / ADMIN；仅 ADMIN 可访问 /api/v1/admin/**
   status TINYINT NOT NULL DEFAULT 1,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_users_email (email),

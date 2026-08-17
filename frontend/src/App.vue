@@ -13,12 +13,17 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const menuItems = [
-  { label: "智能对话", path: "/chat" },
-  { label: "知识库管理", path: "/knowledge-bases" },
-  { label: "管理后台", path: "/admin" },
-  { label: "研发变更规划", path: "/agent" }
-]
+const menuItems = computed(() => {
+  const items = [
+    { label: "智能对话", path: "/chat" },
+    { label: "知识库管理", path: "/knowledge-bases" },
+    { label: "研发变更规划", path: "/agent" }
+  ]
+  if (authStore.isAdmin) {
+    items.splice(2, 0, { label: "管理后台", path: "/admin" })
+  }
+  return items
+})
 
 /** 是否已登录（内存 token 或双令牌本地会话） */
 const isLoggedIn = computed(() => {
@@ -80,7 +85,10 @@ async function logout() {
         <div class="shell-footer">
           <div class="user-block">
             <span class="badge-soft">当前账号</span>
-            <strong>{{ authStore.currentUser?.displayName ?? "未登录" }}</strong>
+            <strong>
+              {{ authStore.currentUser?.displayName ?? "未登录" }}
+              <span class="role-tag">{{ authStore.isAdmin ? "ADMIN" : "USER" }}</span>
+            </strong>
             <span>{{ authStore.currentUser?.email ?? authStore.currentUser?.phone ?? "未登录" }}</span>
           </div>
           <el-button type="primary" plain @click="logout">退出登录</el-button>
@@ -171,6 +179,24 @@ async function logout() {
   padding: 14px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.75);
+}
+
+.user-block strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.role-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #1f3b63;
+  background: rgba(47, 111, 237, 0.12);
 }
 
 .user-block span:last-child {

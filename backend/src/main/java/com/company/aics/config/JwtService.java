@@ -37,6 +37,7 @@ public class JwtService {
                 .id(UUID.randomUUID().toString())
                 .subject(String.valueOf(user.id()))
                 .claim("displayName", user.displayName())
+                .claim("role", normalizeRole(user.role()))
                 .claim("typ", "access")
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plus(Duration.ofMinutes(jwtProperties.getAccessTokenMinutes()))))
@@ -58,8 +59,16 @@ public class JwtService {
         }
         return new AuthenticatedUser(
                 Long.parseLong(claims.getSubject()),
-                claims.get("displayName", String.class)
+                claims.get("displayName", String.class),
+                normalizeRole(claims.get("role", String.class))
         );
+    }
+
+    private static String normalizeRole(String role) {
+        if (role != null && DomainModels.UserRole.ADMIN.name().equalsIgnoreCase(role.trim())) {
+            return DomainModels.UserRole.ADMIN.name();
+        }
+        return DomainModels.UserRole.USER.name();
     }
 
     /** @return Access Token 有效期（秒），写入登录响应 expiresIn */

@@ -55,19 +55,21 @@ public class DataSeeder implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         // 已有用户说明库已初始化，避免重复种子
         if (appDataStore.countUsers() > 0) {
-            log.info("MySQL already seeded, indexing existing documents into vector store.");
+            log.info("MySQL already seeded, ensuring demo admin role and indexing documents.");
+            ensureDemoAdminRole();
             appDataStore.listAllDocuments().forEach(vectorIndexService::upsertDocument);
             return;
         }
 
         log.info("Seeding MySQL demo data...");
-        // 演示账号邮箱使用允许后缀 @qq.com（与注册白名单一致；也可用手机号 13800138000 登录）
+        // 演示账号为 ADMIN，可访问管理后台；也可用手机号 13800138000 登录
         DomainModels.User demoUser = appDataStore.saveUser(new DomainModels.User(
                 null,
                 "demo@qq.com",
                 "13800138000",
                 passwordEncoder.encode("Passw0rd!"),
                 "演示用户",
+                DomainModels.UserRole.ADMIN.name(),
                 1,
                 now().minusDays(3)
         ));
@@ -190,6 +192,28 @@ public class DataSeeder implements ApplicationRunner {
                 .sum();
         log.info("MySQL seed completed. demoUserId={}, supportKbId={}, techKbId={}, conversationId={}, userMessageId={}, supportSeedChars={}",
                 demoUser.id(), supportKb.id(), techKb.id(), conversation.id(), userMessage.id(), supportChars);
+    }
+
+    /**
+     * 已有库升级：确保演示账号具备 ADMIN，便于访问管理后台（普通注册用户仍为 USER）。
+     */
+    private void ensureDemoAdminRole() {
+        appDataStore.findUserByAccount("demo@qq.com").ifPresent(user -> {
+            if (DomainModels.UserRole.ADMIN.name().equalsIgnoreCase(user.role())) {
+                return;
+            }
+            appDataStore.saveUser(new DomainModels.User(
+                    user.id(),
+                    user.email(),
+                    user.phone(),
+                    user.passwordHash(),
+                    user.displayName(),
+                    DomainModels.UserRole.ADMIN.name(),
+                    user.status(),
+                    user.createdAt()
+            ));
+            log.info("Upgraded demo@qq.com role to ADMIN.");
+        });
     }
 
     /**

@@ -128,11 +128,19 @@ public class AppDataStore {
         entity.setPhone(user.phone());
         entity.setPasswordHash(user.passwordHash());
         entity.setDisplayName(user.displayName());
+        entity.setRole(normalizeRole(user.role()));
         entity.setStatus(user.status());
         if (user.createdAt() != null) {
             entity.setCreatedAt(mapper.toLocal(user.createdAt()));
         }
         return mapper.toUser(userRepository.save(entity));
+    }
+
+    private static String normalizeRole(String role) {
+        if (role != null && DomainModels.UserRole.ADMIN.name().equalsIgnoreCase(role.trim())) {
+            return DomainModels.UserRole.ADMIN.name();
+        }
+        return DomainModels.UserRole.USER.name();
     }
 
     /** 知识库是否存在。 */

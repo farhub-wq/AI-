@@ -152,6 +152,7 @@ public class AuthService {
                 normalizedPhone,
                 passwordEncoder.encode(password),
                 name,
+                DomainModels.UserRole.USER.name(),
                 1,
                 now()
         ));

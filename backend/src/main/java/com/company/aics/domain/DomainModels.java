@@ -22,6 +22,12 @@ public final class DomainModels {
         ASSISTANT
     }
 
+    /** 系统角色：普通用户 / 管理员（管理后台）。 */
+    public enum UserRole {
+        USER,
+        ADMIN
+    }
+
     /** 系统用户。 */
     public record User(
             Long id,
@@ -29,6 +35,8 @@ public final class DomainModels {
             String phone,
             String passwordHash,
             String displayName,
+            /** {@link UserRole} 名称：USER / ADMIN */
+            String role,
             Integer status,
             OffsetDateTime createdAt
     ) {

@@ -271,6 +271,9 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 
 ## 7. 管理接口（加分：管理后台）
 
+**权限**：仅 `role=ADMIN` 的用户可调用；普通注册用户为 `USER`，访问返回 HTTP 403（`code=4030`）。  
+演示账号 `demo@qq.com` / `Passw0rd!` 种子为 ADMIN。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/admin/metrics/overview` | 今日提问、好评率、兜底率等 |

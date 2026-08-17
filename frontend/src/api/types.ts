@@ -10,6 +10,8 @@ export interface UserView {
   email?: string | null
   /** 手机注册用户；邮箱注册通常为空 */
   phone?: string | null
+  /** USER / ADMIN；仅 ADMIN 可见管理后台 */
+  role?: "USER" | "ADMIN" | string | null
 }
 
 /**

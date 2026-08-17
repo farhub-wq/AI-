@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 管理端指标与会话总览 API：日提问量、反馈、Agent 规划成功率及全站会话列表。
- * 供运营看板展示，数据来自内存演示存储的聚合统计。
+ * 仅 {@code ADMIN} 角色可访问（见 {@code SecurityConfig}）。
  */
 @RestController
 @RequestMapping("/api/v1/admin")

@@ -38,6 +38,10 @@ public class UserEntity {
     @Column(name = "display_name", nullable = false, unique = true, length = 64)
     private String displayName;
 
+    /** 系统角色：USER / ADMIN。 */
+    @Column(nullable = false, length = 32)
+    private String role = "USER";
+
     /** 账号状态（1=正常）。 */
     @Column(nullable = false)
     private Integer status = 1;
@@ -66,6 +70,10 @@ public class UserEntity {
     public String getDisplayName() { return displayName; }
     /** @param displayName 设置展示名 */
     public void setDisplayName(String displayName) { this.displayName = displayName; }
+    /** @return 角色 USER/ADMIN */
+    public String getRole() { return role; }
+    /** @param role 设置角色 */
+    public void setRole(String role) { this.role = role; }
     /** @return 状态 */
     public Integer getStatus() { return status; }
     /** @param status 设置状态 */

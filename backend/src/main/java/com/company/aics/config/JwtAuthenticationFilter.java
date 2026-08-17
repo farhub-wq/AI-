@@ -1,5 +1,6 @@
 package com.company.aics.config;
 
+import com.company.aics.domain.DomainModels;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,6 +11,7 @@ import java.util.List;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -99,10 +101,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             // 校验签名与过期时间后建立无状态认证上下文
             AuthenticatedUser authenticatedUser = jwtService.parseAccessToken(token);
+            String role = authenticatedUser.role() == null
+                    ? DomainModels.UserRole.USER.name()
+                    : authenticatedUser.role();
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     authenticatedUser,
                     token,
-                    List.of()
+                    List.of(new SimpleGrantedAuthority("ROLE_" + role))
             );
             SecurityContextHolder.getContext().setAuthentication(authentication);
             filterChain.doFilter(request, response);

@@ -65,7 +65,9 @@ public final class ApiModels {
             /** 邮箱注册用户有值；手机注册通常为 null。 */
             String email,
             /** 手机注册用户有值；邮箱注册通常为 null。 */
-            String phone
+            String phone,
+            /** USER / ADMIN；仅 ADMIN 可访问管理后台 */
+            String role
     ) {
     }
 

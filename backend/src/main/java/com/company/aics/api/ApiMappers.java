@@ -20,7 +20,7 @@ public final class ApiMappers {
      * 用户领域对象 → 对外用户视图（不含密码哈希）。
      */
     public static ApiModels.UserView toUserView(DomainModels.User user) {
-        return new ApiModels.UserView(user.id(), user.displayName(), user.email(), user.phone());
+        return new ApiModels.UserView(user.id(), user.displayName(), user.email(), user.phone(), user.role());
     }
 
     /**

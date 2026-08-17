@@ -1,5 +1,5 @@
 import { defineStore } from "pinia"
-import { ref } from "vue"
+import { computed, ref } from "vue"
 import type { LoginResponse, RegisterResponse, UserView } from "@/api/types"
 import {
   getCurrentUser,
@@ -22,6 +22,7 @@ export const useAuthStore = defineStore("auth", () => {
   const accessToken = ref<string | null>(localStorage.getItem(ACCESS_TOKEN_KEY))
   const currentUser = ref<UserView | null>(readUser())
   const loading = ref(false)
+  const isAdmin = computed(() => isAdminUser(currentUser.value))
 
   /**
    * 登录：先清残留 token 与业务态，再请求并落盘 Access/Refresh。
@@ -104,12 +105,18 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken,
     currentUser,
     loading,
+    isAdmin,
     login,
     register,
     refreshCurrentUser,
     logout
   }
 })
+
+/** 是否管理员（管理后台入口与路由守卫用）。 */
+export function isAdminUser(user: UserView | null | undefined): boolean {
+  return (user?.role ?? "").toUpperCase() === "ADMIN"
+}
 
 /**
  * 清空对话 / Agent / 看板 / 知识库前端缓存。
