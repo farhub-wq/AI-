@@ -1,15 +1,12 @@
 ﻿# API文档
 
+> Base URL：`http://localhost:8080/api/v1`  
+> 认证：`Authorization: Bearer <accessToken>`（除注册/登录外）  
+> 与当前 `*Controller` 实现对齐。
+
 ## 1. 约定
 
-### 1.1 基础信息
-
-1. Base URL：`http://localhost:8080/api/v1`
-2. 认证方式：`Authorization: Bearer <token>`
-3. 普通接口返回 JSON
-4. 流式问答返回 SSE
-
-### 1.2 通用响应
+### 1.1 通用 JSON 信封
 
 成功：
 
@@ -21,38 +18,33 @@
 }
 ```
 
-失败：
+失败：`code != 0`，`message` 为可读错误；HTTP 可能为 400/401/429/503 等。
 
-```json
-{
-  "code": 4001,
-  "message": "invalid credentials",
-  "data": null
-}
-```
+### 1.2 演示账号
 
-## 2. 鉴权接口
+- 账号：`demo@example.com` 或手机号 `13800138000`
+- 密码：`Passw0rd!`
+
+---
+
+## 2. 鉴权（Read.md 必含：登录）
 
 ### 2.1 注册
 
-`POST /api/v1/auth/register`
-
-请求体：
+`POST /auth/register`
 
 ```json
 {
   "email": "demo@example.com",
-  "phone": "",
+  "phone": "13800138000",
   "password": "Passw0rd!",
-  "displayName": "demo"
+  "displayName": "演示用户"
 }
 ```
 
 ### 2.2 登录
 
-`POST /api/v1/auth/login`
-
-请求体：
+`POST /auth/login`
 
 ```json
 {
@@ -61,35 +53,33 @@
 }
 ```
 
-响应：
+响应 `data` 示例：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "accessToken": "jwt-token",
-    "tokenType": "Bearer",
-    "expiresIn": 86400,
-    "user": {
-      "id": 1,
-      "displayName": "demo"
-    }
+  "accessToken": "eyJ...",
+  "tokenType": "Bearer",
+  "expiresIn": 86400,
+  "user": {
+    "id": 1,
+    "displayName": "演示用户",
+    "email": "demo@example.com",
+    "phone": "13800138000"
   }
 }
 ```
 
 ### 2.3 当前用户
 
-`GET /api/v1/auth/me`
+`GET /auth/me`
 
-## 3. 会话接口
+---
+
+## 3. 会话（Read.md 必含：会话历史）
 
 ### 3.1 创建会话
 
-`POST /api/v1/conversations`
-
-请求体：
+`POST /conversations`
 
 ```json
 {
@@ -98,88 +88,57 @@
 }
 ```
 
-### 3.2 查询会话列表
+`kbId` 可空；后续问答也可自动路由。
 
-`GET /api/v1/conversations?page=1&pageSize=20`
+### 3.2 会话列表
 
-### 3.3 查询会话详情
+`GET /conversations?page=1&pageSize=20`
 
-`GET /api/v1/conversations/{conversationId}`
+### 3.3 会话详情（含完整消息）
 
-响应示例：
+`GET /conversations/{conversationId}`
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "id": 101,
-    "title": "关于退货规则咨询",
-    "messages": [
-      {
-        "id": 1001,
-        "role": "user",
-        "content": "退货有时间限制吗？",
-        "createdAt": "2026-08-13T18:01:00+08:00"
-      },
-      {
-        "id": 1002,
-        "role": "assistant",
-        "content": "根据当前知识库，签收后 7 天内可申请无理由退货。",
-        "citations": [
-          {
-            "documentId": 12,
-            "documentName": "退换货政策.txt",
-            "chunkId": "doc12-chunk3",
-            "snippet": "签收后 7 天内，商品完好可申请无理由退货。"
-          }
-        ],
-        "createdAt": "2026-08-13T18:01:03+08:00"
-      }
-    ]
-  }
-}
-```
+助手消息可含：`citations`、`intentLabel`、`answerStatus`、`retrievalCount`、`topScore`、`latencyMs`。
 
-## 4. 客服问答接口
+---
 
-### 4.1 流式问答
+## 4. 流式问答（Read.md 必含：问答含流式）
 
-`POST /api/v1/chat/stream`
+### 4.1 接口
+
+`POST /chat/stream`  
+`Content-Type: application/json`  
+`Accept: text/event-stream`
 
 请求体：
 
 ```json
 {
   "conversationId": 101,
-  "kbId": 1,
+  "kbId": 0,
   "question": "退货有时间限制吗？",
   "historyRounds": 3
 }
 ```
 
-业务规则：
+| 字段 | 说明 |
+| --- | --- |
+| `conversationId` | 可空；空则后端创建会话 |
+| `kbId` | `≤0` 或空：跨客服库自动路由；`>0`：指定知识库 |
+| `question` | 必填，最长 500 字 |
+| `historyRounds` | 1–10，默认 3 |
 
-1. 单次提问不超过 500 字
-2. 每个用户每日默认上限 100 次
-3. 检索不足时必须返回兜底话术
-4. 向量检索与 LLM 调用都在后端完成
+业务规则：每日提问上限默认 100（`DAILY_QUESTION_LIMIT`）；无足够检索证据则兜底，不编造。
 
-### 4.2 SSE 数据格式
-
-Header：
+### 4.2 SSE 事件格式（Read.md 必含）
 
 ```text
 Content-Type: text/event-stream
-Cache-Control: no-cache
-Connection: keep-alive
 ```
-
-事件示例：
 
 ```text
 event: message_start
-data: {"messageId":"tmp-1","conversationId":101}
+data: {"messageId":1002,"conversationId":101,"kbId":1,"traceId":"...","intentLabel":"售后问题","evidencePacking":"policy=1, high=2, background=0, ..."}
 
 event: token
 data: {"delta":"根据当前知识库，"}
@@ -188,210 +147,169 @@ event: token
 data: {"delta":"签收后 7 天内可申请无理由退货。"}
 
 event: citation
-data: {"items":[{"chunkId":"doc12-chunk3","documentName":"退换货政策.txt","snippet":"签收后 7 天内，商品完好可申请无理由退货。"}]}
+data: {"items":[{"documentId":12,"documentName":"退换货政策.txt","chunkId":"vec-...","snippet":"签收之日起 7 个自然日内..."}]}
 
 event: message_end
-data: {"messageId":1002,"answerStatus":"success","followUpSuggestions":["退货运费谁承担？","退款多久到账？"]}
+data: {"messageId":1002,"answerStatus":"success","intentLabel":"售后问题","kbId":1,"followUpSuggestions":["退货运费由谁承担？","哪些商品不支持无理由退货？"],"traceId":"...","evidencePacking":"..."}
 ```
 
-错误示例：
+错误：
 
 ```text
 event: error
-data: {"code":"LLM_TIMEOUT","message":"模型响应超时，请稍后重试"}
+data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 ```
 
-## 5. 知识库接口
+`answerStatus`：`success` | `fallback` | `degraded` | `streaming`
+
+---
+
+## 5. 知识库（Read.md 必含：上传文档）
 
 ### 5.1 创建知识库
 
-`POST /api/v1/knowledge-bases`
-
-### 5.2 查询知识库列表
-
-`GET /api/v1/knowledge-bases`
-
-### 5.3 上传文档
-
-`POST /api/v1/knowledge-bases/{kbId}/documents`
-
-请求类型：
-
-`multipart/form-data`
-
-字段：
-
-1. `file`
-2. `priority`，可选，默认 `general`
-
-### 5.4 查询文档列表
-
-`GET /api/v1/knowledge-bases/{kbId}/documents`
-
-### 5.5 删除文档
-
-`DELETE /api/v1/knowledge-bases/{kbId}/documents/{documentId}`
-
-删除语义：
-
-1. 删除 MySQL 文档元数据
-2. 删除 `document_chunks`
-3. 删除 Qdrant 中关联 points
-
-## 6. 反馈接口
-
-### 6.1 提交反馈
-
-`POST /api/v1/messages/{messageId}/feedback`
-
-请求体：
+`POST /knowledge-bases`
 
 ```json
 {
-  "rating": -1,
-  "reasonCode": "answer_not_accurate",
-  "comment": "回答没有说明特殊商品是否可退"
+  "name": "客服知识库",
+  "kbType": "customer_support",
+  "description": "售后政策与 FAQ"
 }
 ```
 
-## 7. 管理接口
+`kbType` 常用：`customer_support` / `technical_docs`。
 
-### 7.1 问答概览
+### 5.2 列表
 
-`GET /api/v1/admin/metrics/overview`
+`GET /knowledge-bases`
 
-### 7.2 反馈统计
+### 5.3 上传文档
 
-`GET /api/v1/admin/metrics/feedback`
+`POST /knowledge-bases/{kbId}/documents`  
+`multipart/form-data`：`file`（`.txt` / `.md` / `.pdf`），可选 `priority`（如 `policy` / `general` / `engineering`）
 
-### 7.3 全量会话查询
+响应文档 `status`：先 `processing`，异步向量化后 `ready` 或 `failed`（前端可轮询列表）。
 
-`GET /api/v1/admin/conversations`
+### 5.4 文档列表
 
-## 8. 第 6 点 Agent 接口
+`GET /knowledge-bases/{kbId}/documents`
 
-这部分是 README 评估标准第 6 点的系统化落地。
+### 5.5 删除文档
 
-### 8.1 创建需求拆解任务
+`DELETE /knowledge-bases/{kbId}/documents/{documentId}`
 
-`POST /api/v1/agent/decompose`
+同步删除 MySQL 切块与向量索引中对应 `vectorId`。
 
-请求体：
+---
+
+## 6. 反馈（Read.md 必含：反馈提交）
+
+`POST /messages/{messageId}/feedback`
 
 ```json
 {
-  "requirementTitle": "用户下单后自动发送短信通知",
-  "requirementContent": "当用户完成下单后，系统应自动向用户手机号发送短信通知，并在前端提示发送结果。",
+  "rating": 1,
+  "reasonCode": "helpful",
+  "comment": "引用清楚"
+}
+```
+
+`rating`：`1` 赞 / `-1` 踩。
+
+---
+
+## 7. 管理接口（加分：管理后台）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/admin/metrics/overview` | 今日提问、好评率、兜底率等 |
+| GET | `/admin/metrics/daily-questions` | 日提问趋势 |
+| GET | `/admin/metrics/feedback` | 反馈分析 |
+| GET | `/admin/conversations` | 全量会话 |
+
+---
+
+## 8. Agent 拆解（Read.md 加分项 6）
+
+### 8.1 创建拆解
+
+`POST /agent/decompose`
+
+```json
+{
+  "requirementTitle": "下单成功后自动发送短信",
+  "requirementContent": "用户下单完成后，系统应自动向用户手机号发送短信，并在前端成功页展示发送结果。",
   "documentScope": {
     "serviceCodes": ["order-service", "user-service", "notification-service", "mall-web"]
   }
 }
 ```
 
-响应：
+响应摘要示例：
 
 ```json
 {
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "planId": 9001,
-    "status": "success",
-    "impactedServices": [
-      {
-        "serviceCode": "order-service",
-        "reason": "负责下单成功事件输出"
-      },
-      {
-        "serviceCode": "notification-service",
-        "reason": "负责消费事件并发送短信"
-      }
-    ],
-    "parallelGroups": [
-      ["短信模板配置", "前端成功提示文案调整"]
-    ]
-  }
+  "planId": 1,
+  "status": "success",
+  "impactedServices": [
+    { "serviceCode": "order-service", "serviceName": "订单服务", "reason": "语义信号：涉及下单/订单状态；命中技术文档：..." },
+    { "serviceCode": "notification-service", "serviceName": "通知服务", "reason": "..." }
+  ],
+  "parallelGroups": [
+    ["开放并校验手机号查询", "更新前端成功状态文案"]
+  ],
+  "missingEvidence": []
 }
 ```
 
-### 8.2 查询拆解任务详情
+`status`：`success` / `partial` / `failed`。
 
-`GET /api/v1/agent/plans/{planId}`
+### 8.2 规划详情
 
-响应示例：
+`GET /agent/plans/{planId}`
+
+`data` 含：`tasks[]`（`taskId` / `taskName` / `targetService` / `executionMode` / `dependsOn` / `reason`）、`validationSteps`、`missingEvidence`、`parallelGroups`。
+
+### 8.3 规划历史
+
+`GET /agent/plans?page=1&pageSize=20`
+
+### 8.4 服务目录
+
+`GET /agent/service-catalog`
+
+### 8.5 服务依赖边
+
+`GET /agent/service-dependencies`
 
 ```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "planId": 9001,
-    "requirementTitle": "用户下单后自动发送短信通知",
-    "impactedServices": [
-      {
-        "serviceCode": "order-service",
-        "reason": "负责下单成功事件输出"
-      },
-      {
-        "serviceCode": "notification-service",
-        "reason": "负责消费事件并发送短信"
-      }
-    ],
-    "tasks": [
-      {
-        "taskId": 1,
-        "taskName": "定义下单成功事件",
-        "targetService": "order-service",
-        "executionMode": "serial",
-        "dependsOn": []
-      },
-      {
-        "taskId": 2,
-        "taskName": "实现短信通知消费逻辑",
-        "targetService": "notification-service",
-        "executionMode": "serial",
-        "dependsOn": [1]
-      }
-    ],
-    "validationSteps": [
-      "验证订单服务成功发布事件",
-      "验证通知服务成功发送短信",
-      "验证前端展示成功提示"
-    ]
+[
+  {
+    "fromServiceCode": "order-service",
+    "toServiceCode": "notification-service",
+    "dependencyType": "event",
+    "dependencyDesc": "下单成功事件由通知服务消费"
   }
-}
+]
 ```
 
-### 8.3 查询可用服务目录
+---
 
-`GET /api/v1/agent/service-catalog`
-
-用途：
-
-1. 返回系统当前已建模的服务列表
-2. 给 Agent 页面做可视化过滤
-
-### 8.4 查询 Agent 规划历史
-
-`GET /api/v1/agent/plans?page=1&pageSize=20`
-
-## 9. 状态码建议
+## 9. HTTP 状态参考
 
 | HTTP | 含义 |
 | --- | --- |
-| 200 | 请求成功 |
-| 400 | 参数错误 |
-| 401 | 未登录或 token 失效 |
-| 403 | 无权限 |
-| 404 | 资源不存在 |
-| 409 | 状态冲突 |
-| 429 | 超出提问上限 |
-| 500 | 服务端异常 |
-| 503 | 第三方 LLM / Embedding / 向量服务不可用 |
+| 200 | 成功（业务错误也可能 200 + code≠0，以全局异常映射为准） |
+| 400 | 参数校验失败 |
+| 401 | 未登录 |
+| 429 | 每日提问超限 |
+| 503 | 上游 LLM/Embedding 等不可用（`AiServiceException`） |
 
-## 10. 实现建议
+---
 
-1. SSE 接口与普通 JSON 接口分开定义
-2. 引用信息不要在每个 token 事件里重复发送
-3. 所有 AI 接口都保留 `traceId`
-4. Agent 拆解接口要保存规划结果，便于回放与评估
+## 10. 实现要点
+
+1. 向量检索与 LLM 仅在后端调用，前端不持有 API Key。  
+2. SSE 与 JSON 接口分离；引用在 `citation` 事件一次性下发。  
+3. 问答与 Agent 规划均落库，支持历史回放。
