@@ -73,6 +73,19 @@ function depTypeLabel(type: string) {
 function serviceLabel(code: string) {
   return catalogNameByCode.value.get(code) ?? code
 }
+
+function llmAssistLabel(status: string) {
+  if (status === "success") return "已润色"
+  if (status === "failed") return "失败已降级"
+  if (status === "skipped") return "已跳过"
+  return status
+}
+
+function planningModeLabel(mode: string | null | undefined) {
+  if (mode === "multi_agent_llm") return "多Agent LLM"
+  if (mode === "rules_fallback") return "规则降级"
+  return mode || "未知"
+}
 </script>
 
 <template>
@@ -80,8 +93,8 @@ function serviceLabel(code: string) {
     <div class="intro-card glass-panel">
       <h2 class="section-title">研发变更规划工作台</h2>
       <p class="section-subtitle">
-        面向真实研发场景：根据变更需求与技术文档，判断改哪些微服务、哪些可并行、哪些必须串行，并给出建议发布顺序与人工评审清单。
-        （仅规划，不自动改多仓代码。）
+        面向真实研发场景：层级多 Agent 流水线（Impact → Reflection → DAG → Reflection → Review），结合技术文档与依赖表判断改哪些微服务、并行与串行；错误记忆落库供自我修正。
+        LLM 不可用时自动降级规则路径。（仅规划，不自动改多仓代码。）
       </p>
     </div>
 
@@ -108,8 +121,8 @@ function serviceLabel(code: string) {
           <el-form-item label="详细说明">
             <el-input v-model="form.requirementContent" type="textarea" :rows="6" />
           </el-form-item>
-          <el-form-item label="服务范围">
-            <el-select v-model="form.serviceCodes" multiple collapse-tags>
+          <el-form-item label="服务范围（选定后严格限定；留空则全量）">
+            <el-select v-model="form.serviceCodes" multiple collapse-tags clearable placeholder="不选=全目录；选定后只能在范围内规划">
               <el-option
                 v-for="service in agentStore.serviceCatalog"
                 :key="service.serviceCode"
@@ -153,9 +166,30 @@ function serviceLabel(code: string) {
                 变更单：{{ currentPlan.changeTicketId }}
               </span>
               <span v-if="currentPlan.priority" class="badge-soft">{{ currentPlan.priority }}</span>
+              <span v-if="currentPlan.planningMode" class="badge-soft">
+                规划模式：{{ planningModeLabel(currentPlan.planningMode) }}
+              </span>
+              <span v-if="(currentPlan.reflectionRetryCount ?? 0) > 0" class="badge-soft">
+                反思重试：{{ currentPlan.reflectionRetryCount }}
+              </span>
+              <span v-if="currentPlan.llmAssistStatus" class="badge-soft">
+                LLM：{{ llmAssistLabel(currentPlan.llmAssistStatus) }}
+              </span>
               <small v-if="currentPlan.requester">提出人：{{ currentPlan.requester }}</small>
               <small class="mono">planId={{ currentPlan.planId }}</small>
             </div>
+
+            <section v-if="currentPlan.llmAssistSummary" class="section-block">
+              <h4>LLM 规划摘要</h4>
+              <p class="assist-summary">{{ currentPlan.llmAssistSummary }}</p>
+            </section>
+
+            <section v-if="(currentPlan.agentTrace?.length ?? 0) > 0" class="section-block">
+              <h4>Agent / 反思轨迹</h4>
+              <ol class="simple-list">
+                <li v-for="(step, idx) in currentPlan.agentTrace" :key="idx">{{ step }}</li>
+              </ol>
+            </section>
 
             <!-- 1. 改哪些服务 -->
             <section class="section-block">
@@ -319,6 +353,13 @@ function serviceLabel(code: string) {
   margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid rgba(23, 32, 51, 0.08);
+}
+
+.assist-summary {
+  margin: 8px 0 0;
+  line-height: 1.6;
+  color: #334155;
+  white-space: pre-wrap;
 }
 
 .section-block h4 {

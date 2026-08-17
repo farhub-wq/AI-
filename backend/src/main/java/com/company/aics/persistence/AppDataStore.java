@@ -1,6 +1,7 @@
 package com.company.aics.persistence;
 
 import com.company.aics.domain.DomainModels;
+import com.company.aics.persistence.entity.AgentErrorMemoryEntity;
 import com.company.aics.persistence.entity.AgentPlanEntity;
 import com.company.aics.persistence.entity.ConversationEntity;
 import com.company.aics.persistence.entity.DocumentChunkEntity;
@@ -11,6 +12,7 @@ import com.company.aics.persistence.entity.MessageFeedbackEntity;
 import com.company.aics.persistence.entity.ServiceCatalogEntity;
 import com.company.aics.persistence.entity.ServiceDependencyEntity;
 import com.company.aics.persistence.entity.UserEntity;
+import com.company.aics.persistence.repo.AgentErrorMemoryRepository;
 import com.company.aics.persistence.repo.AgentPlanRepository;
 import com.company.aics.persistence.repo.ConversationRepository;
 import com.company.aics.persistence.repo.DocumentChunkRepository;
@@ -24,10 +26,13 @@ import com.company.aics.persistence.repo.UserRepository;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +56,7 @@ public class AppDataStore {
     private final ServiceCatalogRepository serviceCatalogRepository;
     private final ServiceDependencyRepository serviceDependencyRepository;
     private final AgentPlanRepository agentPlanRepository;
+    private final AgentErrorMemoryRepository agentErrorMemoryRepository;
     private final DomainMapper mapper;
 
     /**
@@ -67,6 +73,7 @@ public class AppDataStore {
             ServiceCatalogRepository serviceCatalogRepository,
             ServiceDependencyRepository serviceDependencyRepository,
             AgentPlanRepository agentPlanRepository,
+            AgentErrorMemoryRepository agentErrorMemoryRepository,
             DomainMapper mapper
     ) {
         this.userRepository = userRepository;
@@ -79,6 +86,7 @@ public class AppDataStore {
         this.serviceCatalogRepository = serviceCatalogRepository;
         this.serviceDependencyRepository = serviceDependencyRepository;
         this.agentPlanRepository = agentPlanRepository;
+        this.agentErrorMemoryRepository = agentErrorMemoryRepository;
         this.mapper = mapper;
     }
 
@@ -458,6 +466,67 @@ public class AppDataStore {
     @Transactional(readOnly = true)
     public List<DomainModels.AgentPlan> listAllAgentPlans() {
         return agentPlanRepository.findAll().stream().map(mapper::toAgentPlan).toList();
+    }
+
+    /** 写入一条 Agent 错误记忆（反思否决 / 校验失败）。 */
+    @Transactional
+    public DomainModels.AgentErrorMemory saveAgentErrorMemory(DomainModels.AgentErrorMemory memory) {
+        AgentErrorMemoryEntity entity = new AgentErrorMemoryEntity();
+        entity.setAgentRole(memory.agentRole());
+        entity.setStage(memory.stage());
+        entity.setErrorType(memory.errorType());
+        entity.setErrorDetail(memory.errorDetail());
+        entity.setCorrectionHint(memory.correctionHint());
+        entity.setRequirementTitle(memory.requirementTitle());
+        entity.setPlanId(memory.planId());
+        if (memory.createdAt() != null) {
+            entity.setCreatedAt(mapper.toLocal(memory.createdAt()));
+        } else {
+            entity.setCreatedAt(LocalDateTime.now());
+        }
+        AgentErrorMemoryEntity saved = agentErrorMemoryRepository.save(entity);
+        return toAgentErrorMemory(saved);
+    }
+
+    /**
+     * 拉取指定角色近期教训，供自我修正提示注入。
+     */
+    @Transactional(readOnly = true)
+    public List<DomainModels.AgentErrorMemory> listRecentAgentLessons(String agentRole, int limit) {
+        int size = Math.max(1, Math.min(limit, 20));
+        return agentErrorMemoryRepository
+                .findByAgentRoleOrderByCreatedAtDesc(agentRole, PageRequest.of(0, size))
+                .stream()
+                .map(this::toAgentErrorMemory)
+                .toList();
+    }
+
+    /** 全局近期教训（跨角色）。 */
+    @Transactional(readOnly = true)
+    public List<DomainModels.AgentErrorMemory> listRecentAgentLessons(int limit) {
+        int size = Math.max(1, Math.min(limit, 20));
+        return agentErrorMemoryRepository
+                .findAllByOrderByCreatedAtDesc(PageRequest.of(0, size))
+                .stream()
+                .map(this::toAgentErrorMemory)
+                .toList();
+    }
+
+    private DomainModels.AgentErrorMemory toAgentErrorMemory(AgentErrorMemoryEntity entity) {
+        OffsetDateTime created = entity.getCreatedAt() == null
+                ? OffsetDateTime.now(ZoneOffset.UTC)
+                : entity.getCreatedAt().atOffset(ZoneOffset.UTC);
+        return new DomainModels.AgentErrorMemory(
+                entity.getId(),
+                entity.getAgentRole(),
+                entity.getStage(),
+                entity.getErrorType(),
+                entity.getErrorDetail(),
+                entity.getCorrectionHint(),
+                entity.getRequirementTitle(),
+                entity.getPlanId(),
+                created
+        );
     }
 
     /** @return 用户总数（用于判断是否已种子化） */

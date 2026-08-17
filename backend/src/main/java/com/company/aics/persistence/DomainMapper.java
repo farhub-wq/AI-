@@ -209,7 +209,12 @@ public class DomainMapper {
                 payload.evidenceHits() == null ? List.of() : payload.evidenceHits(),
                 payload.dependencyEdgesUsed() == null ? List.of() : payload.dependencyEdgesUsed(),
                 payload.suggestedReleaseOrder() == null ? List.of() : payload.suggestedReleaseOrder(),
-                payload.reviewChecklist() == null ? List.of() : payload.reviewChecklist()
+                payload.reviewChecklist() == null ? List.of() : payload.reviewChecklist(),
+                payload.llmAssistSummary(),
+                payload.llmAssistStatus(),
+                payload.planningMode(),
+                payload.agentTrace() == null ? List.of() : payload.agentTrace(),
+                payload.reflectionRetryCount()
         );
     }
 
@@ -265,7 +270,12 @@ public class DomainMapper {
                     plan.evidenceHits(),
                     plan.dependencyEdgesUsed(),
                     plan.suggestedReleaseOrder(),
-                    plan.reviewChecklist()
+                    plan.reviewChecklist(),
+                    plan.llmAssistSummary(),
+                    plan.llmAssistStatus(),
+                    plan.planningMode(),
+                    plan.agentTrace(),
+                    plan.reflectionRetryCount()
             ));
         } catch (Exception ex) {
             throw new IllegalStateException("序列化 Agent 规划失败", ex);
@@ -317,12 +327,13 @@ public class DomainMapper {
     private static PlanPayload emptyPlanPayload() {
         return new PlanPayload(
                 List.of(), List.of(), List.of(), List.of(), List.of(),
-                null, null, null, List.of(), List.of(), List.of(), List.of()
+                null, null, null, List.of(), List.of(), List.of(), List.of(),
+                null, null, null, List.of(), null
         );
     }
 
     /**
-     * Agent 规划 JSON 载荷：原有拆解字段 + 变更单/证据/发布顺序/评审清单。
+     * Agent 规划 JSON 载荷：拆解字段 + 变更单/证据/发布顺序/评审 + LLM 摘要 + 规划模式 + 反思轨迹。
      * Jackson 反序列化时缺失字段为 null，由 toAgentPlan 归一为空集合。
      */
     public record PlanPayload(
@@ -337,7 +348,12 @@ public class DomainMapper {
             List<DomainModels.AgentEvidenceHit> evidenceHits,
             List<DomainModels.ServiceDependency> dependencyEdgesUsed,
             List<String> suggestedReleaseOrder,
-            List<String> reviewChecklist
+            List<String> reviewChecklist,
+            String llmAssistSummary,
+            String llmAssistStatus,
+            String planningMode,
+            List<String> agentTrace,
+            Integer reflectionRetryCount
     ) {
     }
 }

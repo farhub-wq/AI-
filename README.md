@@ -237,9 +237,10 @@ sequenceDiagram
 
 ### 4.4 拆解流水线
 
-落在 `AgentPlannerService`：
+落在 `AgentPlannerService` + `AgentMultiAgentPipeline`：
 
-1. `parseSignals` → 2. 技术库检索 → 3. 打分/`impactedServices` → 4. 读依赖表两阶段 `buildTasks` → 5. `parallelGroups` → 6. `suggestedReleaseOrder` / `reviewChecklist` → 7. `validatePlan` → 8. 落库 `agent_plans` → 工作台展示。
+**主路径（`planningMode=multi_agent_llm`）**：Tool 接地 → Impact → Reflection → Dag → Reflection → Review → Reflection(final)；错误记忆自我修正。  
+**降级（`rules_fallback`）**：信号/检索打分 → 依赖表建 DAG → 可选文案润色 → 落库。
 
 
 ### 4.5 继续改造，应如何做（不损害已有功能）
@@ -250,7 +251,7 @@ sequenceDiagram
 | --- | --- | --- |
 | 增强服务识别准确率 | 丰富技术库与依赖表 | 无影响客服问答 |
 | 更通用的依赖推断 | 减少硬编码服务名分支 | 仅影响规划页输出 |
-| 引入 LLM 润色规划 | 仅改写说明文案，禁止改服务集合与依赖边 | 客服链路不变 |
+| LLM 多 Agent + 反思 | ✅ Pipeline + ReflectionAgent + `agent_error_memory` | 客服链路不变 |
 | 人工确认闸门 | 规划「确认后锁定」状态 | 纯新增 |
 
 **明确不做：** 不把 Agent Prompt 混进客服 System Prompt；不让规划检索改写客服路由。
@@ -265,7 +266,7 @@ sequenceDiagram
 4. 可并行的人力窗口  
 5. 联调与上线风险  
 
-本项目做成系统内建能力：用文档证据回答「改谁」，用依赖规则回答「谁先谁后」，用并行组回答「谁能一起做」，并用 `partial/failed` 暴露证据不足，而不是假装拆得很准。
+本项目做成系统内建能力：由 LLM 多 Agent 在文档与依赖表接地后回答三问；规则仅降级；并用 `partial/failed` 暴露证据不足。
 
 ## 5. AI 工程重点思考
 

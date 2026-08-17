@@ -180,7 +180,12 @@ public class DataSeeder implements ApplicationRunner {
                         "按「建议发布顺序」安排合并与灰度，禁止下游先于上游合入强依赖契约。",
                         "准备回滚点：事件契约、短信开关、前端文案开关。",
                         "联调通过后再关闭变更单（含端到端验收任务）。"
-                )
+                ),
+                "本演示规划：订单成功后通知链路涉及订单、用户、通知与前端四个服务；请按发布顺序合入。",
+                "skipped",
+                "multi_agent_llm",
+                List.of("演示种子数据（非实时流水线轨迹）"),
+                0
         );
         appDataStore.saveAgentPlan(plan);
 

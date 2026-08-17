@@ -338,9 +338,14 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 | `dependencyEdgesUsed[]` | 本计划用到的依赖边 |
 | `suggestedReleaseOrder[]` | 建议合并/发布顺序（服务码） |
 | `reviewChecklist[]` | 人工评审清单 |
+| `llmAssistSummary` | LLM 规划摘要（可空） |
+| `llmAssistStatus` | `success` / `skipped` / `failed` |
+| `planningMode` | `multi_agent_llm`（主路径）/ `rules_fallback`（降级） |
+| `agentTrace` | 多 Agent / 反思轨迹步骤 |
+| `reflectionRetryCount` | 反思触发的重试次数 |
 | `tasks[]` | 另含 `ownerTeam`、`dependencyType` |
 
-原有：`tasks`（`taskId` / `taskName` / `targetService` / `executionMode` / `dependsOn` / `reason`）、`validationSteps`、`missingEvidence`、`parallelGroups`。
+说明：主路径为层级流水线 Impact→Reflection→DAG→Reflection→Review→Reflection；否决错误写入 `agent_error_memory`，后续规划注入教训自我修正。失败时降级规则引擎。
 
 ### 8.3 规划历史
 

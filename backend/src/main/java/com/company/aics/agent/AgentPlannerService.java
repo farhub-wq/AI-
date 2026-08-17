@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,8 +22,8 @@ import org.springframework.util.StringUtils;
 
 /**
  * 研发变更规划 Agent（README 第 6 点落地）：
- * 语义信号抽取 → 技术文档检索 → 服务打分 → 基于服务依赖表建任务 DAG → 并行组 → 后校验落库。
- * 产出含变更单元数据、证据命中、依赖边、建议发布顺序与人工评审清单。
+ * 优先多 Agent LLM 流水线（Tool 接地 → Impact → Reflection → DAG → Reflection → Review → Reflection）；
+ * 错误记忆落库供自我修正；失败则降级规则/检索路径。
  * 与客服 RAG（ChatService）隔离，不改写问答主链路。
  */
 @Service
@@ -32,15 +33,24 @@ public class AgentPlannerService {
 
     private final AppDataStore appDataStore;
     private final KnowledgeBaseService knowledgeBaseService;
+    private final AgentPlanLlmAssistant planLlmAssistant;
+    private final AgentMultiAgentPipeline multiAgentPipeline;
 
-    public AgentPlannerService(AppDataStore appDataStore, KnowledgeBaseService knowledgeBaseService) {
+    public AgentPlannerService(
+            AppDataStore appDataStore,
+            KnowledgeBaseService knowledgeBaseService,
+            AgentPlanLlmAssistant planLlmAssistant,
+            AgentMultiAgentPipeline multiAgentPipeline
+    ) {
         this.appDataStore = appDataStore;
         this.knowledgeBaseService = knowledgeBaseService;
+        this.planLlmAssistant = planLlmAssistant;
+        this.multiAgentPipeline = multiAgentPipeline;
     }
 
     /**
-     * 创建规划：解析信号 → 检索技术库 → 候选打分 → 任务/依赖 → 并行组 → 校验 → 落库。
-     * 变更单号 / 优先级 / 提出人为可选生产元数据。
+     * 创建规划：优先多 Agent LLM 流水线（Impact→DAG→Review，工具接地）；
+     * 失败则降级规则/检索路径，并可再做文案润色。
      */
     public DomainModels.AgentPlan createPlan(
             Long userId,
@@ -62,6 +72,83 @@ public class AgentPlannerService {
         Map<String, DomainModels.ServiceCatalogItem> catalogIndex = knowledgeBaseService.serviceCatalogIndex();
         List<DomainModels.ServiceDependency> dependencyGraph = appDataStore.listServiceDependencies();
 
+        Optional.ofNullable(signals).ifPresent(s -> {
+            if (!s.actions().isEmpty() || !s.sideEffects().isEmpty()) {
+                log.info("Agent signals actions={} entities={} sideEffects={}",
+                        s.actions(), s.entities(), s.sideEffects());
+            }
+        });
+
+        var llmPlan = multiAgentPipeline.tryPlan(
+                requirementTitle,
+                requirementContent,
+                scope,
+                hits,
+                catalogIndex,
+                dependencyGraph
+        );
+        if (llmPlan.isPresent()) {
+            AgentMultiAgentPipeline.PipelineResult r = llmPlan.get();
+            log.info("Agent plan via multi-agent LLM pipeline, status={}", r.status());
+            return appDataStore.saveAgentPlan(new DomainModels.AgentPlan(
+                    null,
+                    userId,
+                    requirementTitle,
+                    requirementContent,
+                    r.status(),
+                    r.impactedServices(),
+                    r.parallelGroups(),
+                    r.tasks(),
+                    r.validationSteps(),
+                    r.missingEvidence(),
+                    now(),
+                    blankToNull(changeTicketId),
+                    normalizePriority(priority),
+                    blankToNull(requester),
+                    List.copyOf(r.evidenceHits()),
+                    List.copyOf(r.dependencyEdgesUsed()),
+                    r.suggestedReleaseOrder(),
+                    r.reviewChecklist(),
+                    r.llmAssistSummary(),
+                    r.llmAssistStatus(),
+                    r.planningMode(),
+                    r.agentTrace() == null ? List.of() : r.agentTrace(),
+                    r.reflectionRetryCount()
+            ));
+        }
+
+        log.warn("Multi-agent LLM pipeline unavailable, falling back to rules path");
+        return createPlanByRules(
+                userId,
+                requirementTitle,
+                requirementContent,
+                scope,
+                changeTicketId,
+                priority,
+                requester,
+                signals,
+                hits,
+                catalogIndex,
+                dependencyGraph
+        );
+    }
+
+    /**
+     * 规则/检索降级路径：原启发式打分 + 依赖表建 DAG；可选 LLM 仅润色文案。
+     */
+    private DomainModels.AgentPlan createPlanByRules(
+            Long userId,
+            String requirementTitle,
+            String requirementContent,
+            Set<String> scope,
+            String changeTicketId,
+            String priority,
+            String requester,
+            RequirementSignals signals,
+            List<KnowledgeBaseService.SearchHit> hits,
+            Map<String, DomainModels.ServiceCatalogItem> catalogIndex,
+            List<DomainModels.ServiceDependency> dependencyGraph
+    ) {
         Map<String, CandidateScore> candidateMap = new LinkedHashMap<>();
         List<DomainModels.AgentEvidenceHit> evidenceHits = new ArrayList<>();
         for (KnowledgeBaseService.SearchHit hit : hits) {
@@ -100,19 +187,39 @@ public class AgentPlannerService {
         if (hits.isEmpty()) {
             missingEvidence.add("未检索到技术文档证据，请补充服务说明、接口文档或事件文档。");
         }
-        if (!signals.actions().isEmpty() || !signals.sideEffects().isEmpty()) {
-            log.info("Agent signals actions={} entities={} sideEffects={}",
-                    signals.actions(), signals.entities(), signals.sideEffects());
-        }
+        missingEvidence.add("规划模式已降级为规则引擎（LLM 多 Agent 不可用或校验未通过）。");
 
         List<DomainModels.ImpactedService> impactedServices = new ArrayList<>();
         for (Map.Entry<String, CandidateScore> entry : sortedCandidates) {
+            if (!scope.isEmpty() && !scope.contains(entry.getKey())) {
+                continue;
+            }
             DomainModels.ServiceCatalogItem item = catalogIndex.get(entry.getKey());
             impactedServices.add(new DomainModels.ImpactedService(
                     item.serviceCode(),
                     item.serviceName(),
                     String.join("；", entry.getValue().reasons)
             ));
+        }
+
+        if (!scope.isEmpty()) {
+            Set<String> kept = impactedServices.stream()
+                    .map(DomainModels.ImpactedService::serviceCode)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            for (String serviceCode : scope) {
+                if (kept.contains(serviceCode)) {
+                    continue;
+                }
+                DomainModels.ServiceCatalogItem item = catalogIndex.get(serviceCode);
+                if (item != null) {
+                    impactedServices.add(new DomainModels.ImpactedService(
+                            item.serviceCode(),
+                            item.serviceName(),
+                            "人工服务范围硬约束纳入。"
+                    ));
+                }
+            }
+            missingEvidence.add("已按人工服务范围硬约束规划（仅范围内服务）。");
         }
 
         if (impactedServices.isEmpty() && !scope.isEmpty()) {
@@ -150,8 +257,20 @@ public class AgentPlannerService {
         String status = impactedServices.isEmpty()
                 ? "failed"
                 : (missingEvidence.isEmpty() ? "success" : "partial");
+
         List<String> suggestedReleaseOrder = buildSuggestedReleaseOrder(impactedServices, tasks);
         List<String> reviewChecklist = buildReviewChecklist(status, impactedServices, edgesUsed, missingEvidence);
+
+        AgentPlanLlmAssistant.AssistResult assist = planLlmAssistant.polish(
+                requirementTitle,
+                requirementContent,
+                impactedServices,
+                tasks,
+                validationSteps,
+                reviewChecklist,
+                suggestedReleaseOrder,
+                parallelGroups
+        );
 
         return appDataStore.saveAgentPlan(new DomainModels.AgentPlan(
                 null,
@@ -159,10 +278,10 @@ public class AgentPlannerService {
                 requirementTitle,
                 requirementContent,
                 status,
-                impactedServices,
+                assist.impactedServices(),
                 parallelGroups,
-                tasks,
-                validationSteps,
+                assist.tasks(),
+                assist.validationSteps(),
                 missingEvidence,
                 now(),
                 blankToNull(changeTicketId),
@@ -171,7 +290,12 @@ public class AgentPlannerService {
                 List.copyOf(evidenceHits),
                 List.copyOf(edgesUsed),
                 suggestedReleaseOrder,
-                reviewChecklist
+                assist.reviewChecklist(),
+                assist.assistSummary(),
+                assist.status(),
+                AgentMultiAgentPipeline.MODE_RULES_FALLBACK,
+                List.of("规则降级路径（LLM 多 Agent / 反思流水线不可用）"),
+                0
         ));
     }
 

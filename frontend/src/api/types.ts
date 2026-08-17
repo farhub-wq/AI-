@@ -210,6 +210,16 @@ export interface AgentPlanDetailView {
   dependencyEdgesUsed?: ServiceDependencyView[]
   suggestedReleaseOrder?: string[]
   reviewChecklist?: string[]
+  /** LLM 润色摘要 */
+  llmAssistSummary?: string | null
+  /** success / skipped / failed */
+  llmAssistStatus?: string | null
+  /** multi_agent_llm / rules_fallback */
+  planningMode?: string | null
+  /** 多 Agent / 反思轨迹 */
+  agentTrace?: string[] | null
+  /** 反思触发重试次数 */
+  reflectionRetryCount?: number | null
 }
 
 /** 历史规划列表摘要 */

@@ -186,7 +186,12 @@ public final class ApiMappers {
                 plan.dependencyEdgesUsed() == null ? List.of() : plan.dependencyEdgesUsed().stream()
                         .map(ApiMappers::toServiceDependencyView).toList(),
                 plan.suggestedReleaseOrder() == null ? List.of() : plan.suggestedReleaseOrder(),
-                plan.reviewChecklist() == null ? List.of() : plan.reviewChecklist()
+                plan.reviewChecklist() == null ? List.of() : plan.reviewChecklist(),
+                plan.llmAssistSummary(),
+                plan.llmAssistStatus(),
+                plan.planningMode(),
+                plan.agentTrace() == null ? List.of() : plan.agentTrace(),
+                plan.reflectionRetryCount()
         );
     }
 

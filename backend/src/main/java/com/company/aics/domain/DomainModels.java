@@ -211,7 +211,31 @@ public final class DomainModels {
             /** 建议合并/发布顺序（服务码拓扑序）。 */
             List<String> suggestedReleaseOrder,
             /** 人工评审清单。 */
-            List<String> reviewChecklist
+            List<String> reviewChecklist,
+            /** LLM 润色后的规划摘要（可空；主链路失败时不阻塞）。 */
+            String llmAssistSummary,
+            /** LLM 助手状态：success / skipped / failed。 */
+            String llmAssistStatus,
+            /** 规划模式：multi_agent_llm / rules_fallback。 */
+            String planningMode,
+            /** 多 Agent / 反思轨迹（可空）。 */
+            List<String> agentTrace,
+            /** 反思触发的重试次数。 */
+            Integer reflectionRetryCount
+    ) {
+    }
+
+    /** Agent 错误记忆：反思失败后落库，供后续自我修正。 */
+    public record AgentErrorMemory(
+            Long id,
+            String agentRole,
+            String stage,
+            String errorType,
+            String errorDetail,
+            String correctionHint,
+            String requirementTitle,
+            Long planId,
+            OffsetDateTime createdAt
     ) {
     }
 }

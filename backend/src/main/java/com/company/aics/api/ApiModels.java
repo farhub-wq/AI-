@@ -331,7 +331,17 @@ public final class ApiModels {
             List<AgentEvidenceHitView> evidenceHits,
             List<ServiceDependencyView> dependencyEdgesUsed,
             List<String> suggestedReleaseOrder,
-            List<String> reviewChecklist
+            List<String> reviewChecklist,
+            /** LLM 润色摘要（可空）。 */
+            String llmAssistSummary,
+            /** success / skipped / failed */
+            String llmAssistStatus,
+            /** multi_agent_llm / rules_fallback */
+            String planningMode,
+            /** 多 Agent / 反思轨迹 */
+            List<String> agentTrace,
+            /** 反思触发重试次数 */
+            Integer reflectionRetryCount
     ) {
     }
 

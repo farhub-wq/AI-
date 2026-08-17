@@ -118,6 +118,55 @@ public class OpenAiCompatibleChatClient {
     }
 
     /**
+     * 通用 JSON/短文补全（带超时限流重试），供意图分类外的 Agent 润色等场景使用。
+     */
+    public String completeJson(String systemPrompt, String userPrompt, int maxTokens) {
+        validateConfiguration();
+
+        String endpoint = normalizeBaseUrl(aiProperties.getLlmBaseUrl()) + "/chat/completions";
+        String requestJson;
+        try {
+            var body = objectMapper.createObjectNode();
+            body.put("model", aiProperties.getLlmChatModel());
+            body.put("temperature", 0.2);
+            body.put("max_tokens", Math.max(64, maxTokens));
+            var messages = body.putArray("messages");
+            messages.addObject().put("role", "system").put("content", systemPrompt);
+            messages.addObject().put("role", "user").put("content", userPrompt);
+            requestJson = objectMapper.writer()
+                    .with(JsonWriteFeature.ESCAPE_NON_ASCII.mappedFeature())
+                    .writeValueAsString(body);
+        } catch (IOException ex) {
+            throw new IllegalStateException("序列化 LLM JSON 补全请求失败。", ex);
+        }
+
+        final String payload = requestJson;
+        return LlmCallRetry.execute(
+                "json-complete",
+                maxAttempts(),
+                baseDelayMs(),
+                maxDelayMs(),
+                () -> {
+                    try {
+                        return extractAnswer(executeWithOkHttp(endpoint, payload)).trim();
+                    } catch (AiServiceException ex) {
+                        throw ex;
+                    } catch (IOException ex) {
+                        if (isWindows()) {
+                            try {
+                                return extractAnswer(executeWithPowerShell(endpoint, payload)).trim();
+                            } catch (IOException fallbackEx) {
+                                fallbackEx.addSuppressed(ex);
+                                throw LlmCallRetry.classify(fallbackEx);
+                            }
+                        }
+                        throw LlmCallRetry.classify(ex);
+                    }
+                }
+        );
+    }
+
+    /**
      * 客服意图分类专用同步调用：仅输出四类标签之一。
      * 内置超时/限流指数退避重试；失败抛 {@link AiServiceException} 由 {@link IntentClassifier} 降级规则。
      */

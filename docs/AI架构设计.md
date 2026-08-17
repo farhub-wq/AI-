@@ -6,7 +6,7 @@
 本项目 AI 架构同时覆盖：
 
 1. 企业知识客服问答（RAG + SSE）
-2. 研发变更规划 Agent（技术库检索 + 服务依赖 DAG）
+2. 研发变更规划 Agent（多 Agent LLM 流水线 + 规则降级）
 
 架构目标：
 
@@ -41,7 +41,7 @@ flowchart TD
     RAG --> LLM[OpenAI 兼容 Chat API<br/>OkHttp SSE]
 ```
 
-说明：Agent **当前不调用 LLM 生成 DAG**，以检索 + 规则/依赖表规划为主，避免无证据空想服务名。
+说明：Agent **主路径为层级多 Agent 流水线**（Impact→Reflection→DAG→Reflection→Review→Reflection）；错误写入 `agent_error_memory` 供自我修正；失败时降级规则引擎（`rules_fallback`）。
 
 ## 3. 技术实现基线（与代码一致）
 
@@ -106,31 +106,39 @@ sequenceDiagram
 > 题目要求：收到需求 + 技术/接口文档后，判断 **改哪些微服务 / 哪些可并行 / 哪些必须串行**；可用流程图或示例；项目内实现更好。  
 > 本系统实现为「研发变更规划」工作台（规划 Agent），**不自动改多仓代码**。
 
-代码：`AgentPlannerService`、`POST /api/v1/agent/decompose`、前端「研发变更规划」页。
+代码：`AgentPlannerService`、`AgentMultiAgentPipeline`、`AgentReflectionAgent`、`POST /api/v1/agent/decompose`、前端「研发变更规划」页。
 
 ### 5.1 三个问题 ↔ 实现
 
 | 问题 | 实现方式 | 主要输出字段 |
 | --- | --- | --- |
-| 改哪些微服务？ | 技术库检索（`serviceCode`）+ 语义信号启发 + 人工范围加权 | `impactedServices`、`evidenceHits` |
-| 哪些可并行？ | `executionMode=parallel` 且 `dependsOn` 空 | `parallelGroups` |
-| 哪些必须串行？ | 读 `service_dependencies` 两阶段挂边 + 领域兜底 | `tasks.dependsOn`、`dependencyEdgesUsed`、`suggestedReleaseOrder` |
+| 改哪些微服务？ | **ImpactAgent** + **Reflection**；历史教训注入 | `impactedServices`、`evidenceHits` |
+| 哪些可并行？ | **DagAgent** + Reflection；降级按 `dependsOn` 空分组 | `parallelGroups` |
+| 哪些必须串行？ | **DagAgent** 挂边 + 程序校验 + 反思重试 | `tasks.dependsOn`、`suggestedReleaseOrder` |
+
+字段：`planningMode`、`agentTrace`、`reflectionRetryCount`。错误记忆表：`agent_error_memory`。
 
 ### 5.2 总览流程图（与代码步骤一致）
 
 ```mermaid
 flowchart TD
-    A[变更需求_可选变更单] --> B[parseSignals]
-    B --> C[searchTechnicalDocuments]
-    C --> D[候选服务打分]
-    D --> E[listServiceDependencies]
-    E --> F[buildTasks 两阶段DAG]
-    F --> G[buildParallelGroups]
-    G --> H[suggestedReleaseOrder]
-    H --> I[reviewChecklist]
-    I --> J[validatePlan]
-    J --> K[落库 agent_plans]
-    K --> L[工作台展示三问结果]
+    A[变更需求] --> T[Tool接地_检索_目录_依赖]
+    T --> L[读取错误记忆_自我修正]
+    L --> I[ImpactAgent]
+    I --> RI[ReflectionAgent]
+    RI -->|否决+落库| I
+    RI -->|通过| D[DagAgent]
+    D --> RD[ReflectionAgent]
+    RD -->|否决+落库| D
+    RD -->|通过| R[ReviewAgent]
+    R --> RF[ReflectionAgent_final]
+    RF -->|指定重试| I
+    RF -->|指定重试| D
+    RF -->|指定重试| R
+    RF -->|通过| K[落库 agent_plans]
+    I -->|整链失败| F[规则降级]
+    F --> K
+    K --> UI[工作台展示]
 ```
 
 ### 5.3 示例：下单后发短信（对照三问）
@@ -191,7 +199,7 @@ flowchart LR
 
 ### 6.4 Agent 说明
 
-Agent **不以 LLM System Prompt 生成服务列表**；规则锁定服务集合与 `dependsOn`。若未来加 LLM，仅允许润色文案，禁止改边（见 `项目说明.md` §4.5）。
+Agent **主路径为层级多 Agent 流水线**（Impact→Reflection→DAG→Review）；`AgentReflectionAgent` 否决时落库 `agent_error_memory` 并触发重试；后续规划注入历史教训自我修正。失败则降级规则（见 `项目说明.md` §4.4）。
 
 ## 7. 向量检索策略（Read.md 要求）
 
