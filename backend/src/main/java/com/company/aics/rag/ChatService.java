@@ -90,7 +90,7 @@ public class ChatService {
         String traceId = UUID.randomUUID().toString().replace("-", "");
         conversationService.addUserMessage(boundConversation.id(), userId, question, traceId);
 
-        // 意图识别必须在 RAG / LLM 之前：闲聊不灌知识库，避免误标成产品咨询后硬扯商品
+        // 意图识别：LLM 优先（含重试），失败降级规则；闲聊不灌知识库
         IntentClassifier.IntentResult intent = intentClassifier.classify(question);
         String intentLabel = intent.label();
         log.info("Intent classified traceId={} label={} score={} signals={}",

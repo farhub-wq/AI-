@@ -118,6 +118,72 @@ public class OpenAiCompatibleChatClient {
     }
 
     /**
+     * 客服意图分类专用同步调用：仅输出四类标签之一。
+     * 内置超时/限流指数退避重试；失败抛 {@link AiServiceException} 由 {@link IntentClassifier} 降级规则。
+     */
+    public String classifyCustomerIntent(String question) {
+        validateConfiguration();
+
+        String endpoint = normalizeBaseUrl(aiProperties.getLlmBaseUrl()) + "/chat/completions";
+        String requestJson;
+        try {
+            var body = objectMapper.createObjectNode();
+            body.put("model", aiProperties.getLlmChatModel());
+            body.put("temperature", 0);
+            body.put("max_tokens", 24);
+            var messages = body.putArray("messages");
+            messages.addObject()
+                    .put("role", "system")
+                    .put("content", """
+                            你是企业智能客服的意图分类器。根据用户问题，只输出以下四个标签之一（不要解释、不要标点、不要英文翻译）：
+                            产品咨询
+                            售后问题
+                            闲聊
+                            投诉
+
+                            判定要点：
+                            - 投诉：强烈不满、维权、差评、要赔偿、态度差
+                            - 售后问题：退换货、退款、保修、损坏、取消订单等
+                            - 产品咨询：发货物流、规格、库存、价格、怎么用等商品事实
+                            - 闲聊：寒暄、身份询问、天气/时间/百科等与购物无关的内容
+                            """);
+            messages.addObject()
+                    .put("role", "user")
+                    .put("content", "用户问题：\n" + question + "\n\n请只输出意图标签：");
+            requestJson = objectMapper.writer()
+                    .with(JsonWriteFeature.ESCAPE_NON_ASCII.mappedFeature())
+                    .writeValueAsString(body);
+        } catch (IOException ex) {
+            throw new IllegalStateException("序列化意图分类请求失败。", ex);
+        }
+
+        final String payload = requestJson;
+        return LlmCallRetry.execute(
+                "intent",
+                maxAttempts(),
+                baseDelayMs(),
+                maxDelayMs(),
+                () -> {
+                    try {
+                        return extractAnswer(executeWithOkHttp(endpoint, payload)).trim();
+                    } catch (AiServiceException ex) {
+                        throw ex;
+                    } catch (IOException ex) {
+                        if (isWindows()) {
+                            try {
+                                return extractAnswer(executeWithPowerShell(endpoint, payload)).trim();
+                            } catch (IOException fallbackEx) {
+                                fallbackEx.addSuppressed(ex);
+                                throw LlmCallRetry.classify(fallbackEx);
+                            }
+                        }
+                        throw LlmCallRetry.classify(ex);
+                    }
+                }
+        );
+    }
+
+    /**
      * 流式调用 chat/completions，按 SSE data 行解析 delta 并回调。
      * 仅在尚未向客户端吐出任何 token 时重试，避免半截回答重复。
      *

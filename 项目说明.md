@@ -310,11 +310,12 @@ sequenceDiagram
 
 ### 5.3.1 意图识别（加分项）
 
-在调用 LLM 前由 `IntentClassifier` 完成分类，标签写入助手消息与会话 `lastIntent`，前端会话气泡展示：
+在调用 RAG / 回答 LLM 前由 `IntentClassifier` 完成分类，标签写入助手消息与会话 `lastIntent`，前端会话气泡展示：
 
-- 产品咨询 / 售后问题 / 闲聊 / 投诉（对齐 README）
-- 多信号加权打分 + 平局优先级（投诉 > 售后 > 产品 > 闲聊）
-- 追问建议与 Prompt 约束随意图切换
+- 四类意图：产品咨询 / 售后问题 / 闲聊 / 投诉（对齐 README）
+- **优先 LLM 智能分类**（短 Prompt + `temperature=0`，复用 `LlmCallRetry` 超时/限流重试）
+- LLM 输出无法解析、或重试耗尽：自动**降级到关键词/正则规则**（`matchedSignals` 以 `rules-fallback:` 标记）
+- 追问建议与 Prompt 约束随意图切换；闲聊跳过知识库检索
 
 ### 5.4 如何满足大规模知识检索场景
 

@@ -69,7 +69,7 @@ sequenceDiagram
     U->>FE: 提问
     FE->>API: POST /api/v1/chat/stream
     API->>DB: 配额/会话
-    API->>IC: 意图分类
+    API->>IC: LLM 意图分类（失败→规则降级）
     API->>KB: 检索(Top-K)
     KB-->>API: SearchHit[]
     API->>EG: 阈值过滤后 pack 分层
@@ -94,7 +94,7 @@ sequenceDiagram
 | --- | --- |
 | 鉴权会话 | 注册登录、JWT、会话历史、每日提问上限 |
 | 知识入库 | `.txt/.md/.pdf` 解析切块；`processing→ready/failed` 异步向量化；删除同步清向量 |
-| RAG 编排 | 意图 → 检索 → `EvidenceGovernanceService` → Prompt → SSE → 一致性校验 |
+| RAG 编排 | **LLM 意图**（失败则规则降级）→ 检索 → `EvidenceGovernanceService` → Prompt → SSE → 一致性校验 |
 | 反馈运营 | 点赞点踩、概览指标、兜底率等 |
 
 ### 4.2 增量更新
