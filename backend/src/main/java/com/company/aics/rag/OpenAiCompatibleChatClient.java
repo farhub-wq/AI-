@@ -292,7 +292,7 @@ public class OpenAiCompatibleChatClient {
         var root = objectMapper.createObjectNode();
         var messages = objectMapper.createArrayNode();
         boolean hasEvidence = evidenceBundle != null && !evidenceBundle.isEmpty();
-        String intent = StringUtils.hasText(intentLabel) ? intentLabel : IntentClassifier.PRODUCT;
+        String intent = StringUtils.hasText(intentLabel) ? intentLabel : IntentClassifier.CHITCHAT;
 
         messages.add(objectMapper.createObjectNode()
                 .put("role", "system")
@@ -355,9 +355,18 @@ public class OpenAiCompatibleChatClient {
         String intentHint = switch (intentLabel) {
             case IntentClassifier.AFTER_SALES -> "当前意图为售后问题：回答必须严格依据政策类证据中的时效、条件与例外，禁止估算天数或运费。";
             case IntentClassifier.COMPLAINT -> "当前意图为投诉：先共情安抚，再给出可执行处理路径；不得承诺证据中不存在的赔偿。";
-            case IntentClassifier.CHITCHAT -> "当前意图为闲聊：简短友好回应，可引导用户提出具体业务问题。";
+            case IntentClassifier.CHITCHAT -> "当前意图为闲聊：简短友好回应即可；若问题与购物无关（如天气、时间、百科），如实说明本客服无法提供该类实时/外部信息，不要编造，也不要硬扯成商品推荐；可礼貌邀请用户咨询商品、订单或售后问题。";
             default -> "当前意图为产品咨询：优先回答时效、物流、规格等事实，避免扩展到未提供的售后细则。";
         };
+
+        if (IntentClassifier.CHITCHAT.equals(intentLabel)) {
+            return """
+                    你是电商平台的企业智能客服助手，请使用简体中文回答。
+                    %s
+                    本轮为闲聊，未注入知识库证据。
+                    必须遵守：不要编造天气、新闻或内部政策数字；回答控制在 2～4 句；不要输出大段营销话术。
+                    """.formatted(intentHint);
+        }
 
         if (hasKnowledgeEvidence) {
             return """
@@ -396,8 +405,13 @@ public class OpenAiCompatibleChatClient {
         builder.append("\n\n");
 
         if (evidenceBundle == null || evidenceBundle.isEmpty()) {
-            builder.append("知识库证据：\n未检索到相关内部证据。\n");
-            builder.append("请明确说明依据不足，不要编造细则。\n");
+            if (IntentClassifier.CHITCHAT.equals(intentLabel)) {
+                builder.append("知识库证据：本轮闲聊未检索知识库。\n");
+                builder.append("请按闲聊意图简短回复，不要编造外部事实，不要强行推荐商品。\n");
+            } else {
+                builder.append("知识库证据：\n未检索到相关内部证据。\n");
+                builder.append("请明确说明依据不足，不要编造细则。\n");
+            }
             return builder.toString();
         }
 

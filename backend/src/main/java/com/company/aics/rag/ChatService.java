@@ -90,35 +90,48 @@ public class ChatService {
         String traceId = UUID.randomUUID().toString().replace("-", "");
         conversationService.addUserMessage(boundConversation.id(), userId, question, traceId);
 
-        List<KnowledgeBaseService.SearchHit> hits = knowledgeBaseService.searchSupportChunks(
-                boundConversation.kbId(),
-                question,
-                aiProperties.getRagTopK()
-        );
-        // 先阈值过滤，再分层打包（政策优先 / 高相关 / 背景摘要）
-        List<KnowledgeBaseService.SearchHit> thresholdHits = filterByThreshold(hits);
-        EvidenceGovernanceService.EvidenceBundle evidenceBundle = evidenceGovernanceService.pack(
-                thresholdHits,
-                question,
-                aiProperties.getRagMaxContextChars()
-        );
-        log.info("Evidence packing traceId={} {}", traceId, evidenceBundle.packingNote());
+        // 意图识别必须在 RAG / LLM 之前：闲聊不灌知识库，避免误标成产品咨询后硬扯商品
+        IntentClassifier.IntentResult intent = intentClassifier.classify(question);
+        String intentLabel = intent.label();
+        log.info("Intent classified traceId={} label={} score={} signals={}",
+                traceId, intentLabel, intent.score(), intent.matchedSignals());
+
+        EvidenceGovernanceService.EvidenceBundle evidenceBundle;
+        List<DomainModels.Citation> citations;
+        if (IntentClassifier.CHITCHAT.equals(intentLabel)) {
+            // 闲聊：跳过向量检索，空证据交给闲聊 Prompt / 本地短回复
+            evidenceBundle = new EvidenceGovernanceService.EvidenceBundle(
+                    List.of(), List.of(), List.of(), List.of(), "skipped-for-chitchat"
+            );
+            citations = List.of();
+        } else {
+            List<KnowledgeBaseService.SearchHit> hits = knowledgeBaseService.searchSupportChunks(
+                    boundConversation.kbId(),
+                    question,
+                    aiProperties.getRagTopK()
+            );
+            List<KnowledgeBaseService.SearchHit> thresholdHits = filterByThreshold(hits);
+            evidenceBundle = evidenceGovernanceService.pack(
+                    thresholdHits,
+                    question,
+                    aiProperties.getRagMaxContextChars()
+            );
+            log.info("Evidence packing traceId={} {}", traceId, evidenceBundle.packingNote());
+            citations = evidenceBundle.citationHits().stream()
+                    .map(hit -> new DomainModels.Citation(
+                            hit.document().id(),
+                            hit.document().fileName(),
+                            hit.chunk().vectorId(),
+                            summarizeSnippet(hit.chunk().content())
+                    ))
+                    .toList();
+        }
 
         List<DomainModels.Message> history = conversationService.listRecentMessages(
                 boundConversation.id(),
                 sanitizeHistoryRounds(historyRounds)
         );
 
-        List<DomainModels.Citation> citations = evidenceBundle.citationHits().stream()
-                .map(hit -> new DomainModels.Citation(
-                        hit.document().id(),
-                        hit.document().fileName(),
-                        hit.chunk().vectorId(),
-                        summarizeSnippet(hit.chunk().content())
-                ))
-                .toList();
-
-        String intentLabel = intentClassifier.classify(question).label();
         double topScore = evidenceBundle.citationHits().isEmpty()
                 ? 0.0
                 : roundScore(evidenceBundle.citationHits().getFirst().score());
@@ -149,7 +162,27 @@ public class ChatService {
                         "evidencePacking", evidenceBundle.packingNote()
                 ));
 
-                if (evidenceBundle.isEmpty()) {
+                if (IntentClassifier.CHITCHAT.equals(intentLabel)) {
+                    // 闲聊：走 LLM 闲聊 Prompt；失败则用本地短回复（不走知识库兜底话术）
+                    try {
+                        chatClient.streamAnswer(question, history, evidenceBundle, intentLabel, delta -> {
+                            answerBuilder.append(delta);
+                            try {
+                                sendEvent(emitter, "token", Map.of("delta", delta));
+                            } catch (IOException ex) {
+                                throw new IllegalStateException("SSE token 发送失败。", ex);
+                            }
+                        });
+                        if (!StringUtils.hasText(answerBuilder.toString())) {
+                            answerStatus = "degraded";
+                            streamLocalText(emitter, answerBuilder, buildChitchatFallback(question));
+                        }
+                    } catch (Exception ex) {
+                        log.warn("闲聊 LLM 调用失败，使用本地闲聊回复。", ex);
+                        answerStatus = "degraded";
+                        streamLocalText(emitter, answerBuilder, buildChitchatFallback(question));
+                    }
+                } else if (evidenceBundle.isEmpty()) {
                     answerStatus = "fallback";
                     streamLocalText(emitter, answerBuilder, buildNoEvidenceFallback());
                 } else {
@@ -278,12 +311,25 @@ public class ChatService {
         return Math.max(1, Math.min(10, historyRounds));
     }
 
-    /** 无检索证据时的用户提示文案。 */
+    /** 无检索证据时的用户提示文案（业务意图）。 */
     private String buildNoEvidenceFallback() {
         return """
                 当前知识库中没有找到足够依据来回答该问题。
                 请补充更多细节，例如：商品名称、订单状态、售后场景或具体报错信息，我会再帮你查询。
                 """;
+    }
+
+    /**
+     * 闲聊意图本地兜底：不编造天气等外部信息，也不硬扯商品证据。
+     */
+    private String buildChitchatFallback(String question) {
+        String q = question == null ? "" : question.trim();
+        if (q.contains("天气") || q.toLowerCase(java.util.Locale.ROOT).contains("weather")) {
+            return "我这边是购物客服，暂时查不到实时天气信息哦。"
+                    + "如果你想了解商品发货、规格或售后政策，我可以马上帮你查知识库。";
+        }
+        return "哈哈，我更擅长解答购物相关问题～"
+                + "你可以问我发货时效、商品规格，或退换货政策，我来帮你查。";
     }
 
     /** LLM 失败或一致性校验失败时，按分层证据拼装保守摘要回答。 */

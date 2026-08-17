@@ -1,13 +1,38 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from "vue"
 import type { MessageView } from "@/api/types"
 
 /**
  * 消息列表：按角色渲染用户/助手气泡，并展示意图标签与回答状态文案。
+ * 新消息或流式增量到来时自动滚到最底部，避免用户看不到最新回答。
  */
 
-defineProps<{
+const props = defineProps<{
   messages: MessageView[]
 }>()
+
+/** 可滚动容器 */
+const listRef = ref<HTMLElement | null>(null)
+/** 列表底部哨兵，用于 scrollIntoView */
+const bottomRef = ref<HTMLElement | null>(null)
+
+/**
+ * 滚到最新消息底部。
+ * @param smooth 是否平滑滚动（首屏/切换会话用瞬时，流式输出用平滑）
+ */
+async function scrollToLatest(smooth = true) {
+  await nextTick()
+  const container = listRef.value
+  const bottom = bottomRef.value
+  if (!container) {
+    return
+  }
+  if (bottom) {
+    bottom.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "end" })
+  }
+  // 再强制一次 scrollTop，兼容 scrollIntoView 被外层布局打断的情况
+  container.scrollTop = container.scrollHeight
+}
 
 /** 将 answerStatus 转为可读中文状态说明 */
 function statusText(message: MessageView) {
@@ -32,10 +57,35 @@ function intentClass(label?: string | null) {
   if (label.includes("闲聊")) return "intent chitchat"
   return "intent product"
 }
+
+/** 条数变化（发问/切会话）：瞬时滚到底 */
+watch(
+  () => props.messages.length,
+  () => {
+    void scrollToLatest(false)
+  }
+)
+
+/**
+ * 内容变化（流式 token 追加、状态从 streaming→完成）：持续跟到底。
+ * 用最后一条内容长度 + 状态做依赖，避免 deep watch 过重。
+ */
+watch(
+  () => {
+    const last = props.messages[props.messages.length - 1]
+    if (!last) {
+      return ""
+    }
+    return `${last.id}:${last.content.length}:${last.answerStatus ?? ""}`
+  },
+  () => {
+    void scrollToLatest(true)
+  }
+)
 </script>
 
 <template>
-  <div class="message-list glass-panel">
+  <div ref="listRef" class="message-list glass-panel">
     <div
       v-for="message in messages"
       :key="message.id"
@@ -52,6 +102,8 @@ function intentClass(label?: string | null) {
       <p>{{ message.content }}</p>
       <div v-if="message.answerStatus" class="message-status mono">{{ statusText(message) }}</div>
     </div>
+    <!-- 底部锚点：保证最新回答始终进入可视区 -->
+    <div ref="bottomRef" class="scroll-anchor" aria-hidden="true" />
   </div>
 </template>
 
@@ -64,6 +116,13 @@ function intentClass(label?: string | null) {
   min-height: 360px;
   max-height: 52vh;
   overflow: auto;
+  scroll-behavior: smooth;
+}
+
+.scroll-anchor {
+  width: 100%;
+  height: 1px;
+  flex-shrink: 0;
 }
 
 .message-card {
