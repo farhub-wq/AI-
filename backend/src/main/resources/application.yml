@@ -49,8 +49,7 @@ ai:
   embedding-base-url: ${EMBEDDING_BASE_URL:https://your-embedding-provider.example.com/v1}
   embedding-api-key: ${EMBEDDING_API_KEY:replace-me}
   embedding-model: ${EMBEDDING_MODEL:text-embedding-3-small}
-  qdrant-url: ${QDRANT_URL:http://localhost:6333}
-  qdrant-collection: ${QDRANT_COLLECTION:kb_chunks}
+  faiss-index-dir: ${FAISS_INDEX_DIR:data/faiss-index}
   rag-top-k: ${RAG_TOP_K:12}
   rag-score-threshold: ${RAG_SCORE_THRESHOLD:0.22}
   rag-max-context-chars: ${RAG_MAX_CONTEXT_CHARS:6000}

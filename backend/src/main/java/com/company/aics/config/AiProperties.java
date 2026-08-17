@@ -3,7 +3,7 @@ package com.company.aics.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * AI 相关配置属性（{@code ai.*}）：LLM/Embedding 端点、Qdrant、RAG 检索阈值与日提问上限等。
+ * AI 相关配置属性（{@code ai.*}）：LLM/Embedding 端点、Faiss 本地索引目录、RAG 检索阈值与日提问上限等。
  * 由 Spring Boot 从配置文件绑定，供 RAG、向量索引与限流逻辑读取。
  */
 @ConfigurationProperties(prefix = "ai")
@@ -21,10 +21,8 @@ public class AiProperties {
     private String embeddingApiKey;
     /** Embedding 模型名。 */
     private String embeddingModel;
-    /** Qdrant 服务地址。 */
-    private String qdrantUrl;
-    /** Qdrant collection 名称。 */
-    private String qdrantCollection;
+    /** Faiss 本地文件索引目录（相对后端工作目录）。 */
+    private String faissIndexDir = "data/faiss-index";
     /** RAG 检索返回的最大条数。 */
     private Integer ragTopK = 12;
     /** RAG 相似度分数阈值，低于此值的命中丢弃。 */
@@ -98,24 +96,14 @@ public class AiProperties {
         this.embeddingModel = embeddingModel;
     }
 
-    /** @return Qdrant URL */
-    public String getQdrantUrl() {
-        return qdrantUrl;
+    /** @return Faiss 本地索引目录 */
+    public String getFaissIndexDir() {
+        return faissIndexDir;
     }
 
-    /** @param qdrantUrl 设置 Qdrant URL */
-    public void setQdrantUrl(String qdrantUrl) {
-        this.qdrantUrl = qdrantUrl;
-    }
-
-    /** @return Qdrant collection 名 */
-    public String getQdrantCollection() {
-        return qdrantCollection;
-    }
-
-    /** @param qdrantCollection 设置 collection 名 */
-    public void setQdrantCollection(String qdrantCollection) {
-        this.qdrantCollection = qdrantCollection;
+    /** @param faissIndexDir 设置 Faiss 本地索引目录 */
+    public void setFaissIndexDir(String faissIndexDir) {
+        this.faissIndexDir = faissIndexDir;
     }
 
     /** @return RAG top-K */

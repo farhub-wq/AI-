@@ -80,7 +80,7 @@ public class EmbeddingClient {
         return vectors;
     }
 
-    /** @return 本地向量维度（亦作为 Qdrant collection 创建尺寸参考） */
+    /** @return 本地向量维度 */
     public int dimension() {
         return LOCAL_DIMENSION;
     }

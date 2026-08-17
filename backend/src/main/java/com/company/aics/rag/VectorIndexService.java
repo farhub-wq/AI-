@@ -6,45 +6,45 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.io.IOException;
-import java.time.Duration;
+import jakarta.annotation.PostConstruct;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * 混合向量索引：始终维护内存余弦检索表，并在 Qdrant 可用时镜像写入/检索。
- * Qdrant 不可用时自动降级为纯内存索引，保证本地演示可运行。
+ * Faiss 风格本地文件向量索引（对齐题目 FAQ：本地文件模式，无需独立向量服务）。
+ * <p>
+ * 采用与 Faiss {@code IndexFlatIP} 同类的精确余弦检索，向量与 metadata 落盘到
+ * {@code ai.faiss-index-dir}；相对 Chroma 免 Docker/额外进程，更适合本仓库快速开发，
+ * 同时具备删除同步、kb/service 过滤与重启复用向量（同内容跳过重新 Embedding）等生产向能力。
  */
 @Service
 public class VectorIndexService {
 
     private static final Logger log = LoggerFactory.getLogger(VectorIndexService.class);
-    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final Map<String, VectorRecord> memoryIndex = new ConcurrentHashMap<>();
     private final EmbeddingClient embeddingClient;
     private final AiProperties aiProperties;
     private final ObjectMapper objectMapper;
-    private final OkHttpClient httpClient;
-    private volatile Boolean qdrantAvailable;
+    private final Object persistLock = new Object();
 
     /**
      * @param embeddingClient 向量化客户端
-     * @param aiProperties    Qdrant/collection 配置
-     * @param objectMapper    JSON 处理
+     * @param aiProperties    Faiss 索引目录等配置
+     * @param objectMapper    JSON 读写
      */
     public VectorIndexService(
             EmbeddingClient embeddingClient,
@@ -54,24 +54,77 @@ public class VectorIndexService {
         this.embeddingClient = embeddingClient;
         this.aiProperties = aiProperties;
         this.objectMapper = objectMapper;
-        this.httpClient = new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .readTimeout(Duration.ofSeconds(20))
-                .writeTimeout(Duration.ofSeconds(20))
-                .callTimeout(Duration.ofSeconds(25))
-                .retryOnConnectionFailure(true)
-                .build();
+    }
+
+    /** 启动时从本地 Faiss 索引文件加载，避免无谓重新 Embedding。 */
+    @PostConstruct
+    void loadFromDisk() {
+        Path indexFile = indexFile();
+        if (!Files.isRegularFile(indexFile)) {
+            log.info("Faiss local index empty, will create on first upsert: {}", indexFile.toAbsolutePath());
+            return;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(indexFile.toFile());
+            JsonNode points = root.path("points");
+            if (!points.isArray()) {
+                return;
+            }
+            int loaded = 0;
+            for (JsonNode point : points) {
+                VectorRecord record = deserializePoint(point);
+                if (record != null) {
+                    memoryIndex.put(record.vectorId(), record);
+                    loaded++;
+                }
+            }
+            log.info("Faiss local index loaded: {} points from {}", loaded, indexFile.toAbsolutePath());
+        } catch (Exception ex) {
+            log.warn("Faiss local index load failed, starting empty: {}", ex.getMessage());
+            memoryIndex.clear();
+        }
     }
 
     /**
-     * 将单个切块 embedding 后写入内存索引，并尝试同步到 Qdrant。
+     * 将单个切块 embedding 后写入内存索引并落盘。
+     * 若同 {@code vectorId} 且正文未变，复用已有向量（跳过 Embedding API）。
      */
     public void upsertChunk(DomainModels.DocumentChunk chunk, DomainModels.KnowledgeDocument document) {
-        float[] vector = embeddingClient.embed(chunk.content());
+        upsertChunk(chunk, document, true);
+    }
+
+    /**
+     * 对文档全部切块执行 upsert，整篇只落盘一次。
+     */
+    public void upsertDocument(DomainModels.KnowledgeDocument document) {
+        for (DomainModels.DocumentChunk chunk : document.chunks()) {
+            upsertChunk(chunk, document, false);
+        }
+        persistToDisk();
+    }
+
+    private void upsertChunk(
+            DomainModels.DocumentChunk chunk,
+            DomainModels.KnowledgeDocument document,
+            boolean persist
+    ) {
+        VectorRecord existing = memoryIndex.get(chunk.vectorId());
+        float[] vector;
+        if (existing != null
+                && Objects.equals(existing.content(), chunk.content())
+                && existing.vector() != null
+                && existing.vector().length > 0) {
+            vector = existing.vector();
+        } else {
+            vector = embeddingClient.embed(chunk.content());
+        }
         VectorRecord record = new VectorRecord(
                 chunk.vectorId(),
                 chunk.kbId(),
                 chunk.documentId(),
+                chunk.id(),
+                chunk.chunkIndex(),
+                chunk.sectionTitle(),
                 document.fileName(),
                 document.serviceCode(),
                 document.priority(),
@@ -81,20 +134,13 @@ public class VectorIndexService {
                 vector
         );
         memoryIndex.put(record.vectorId(), record);
-        upsertToQdrant(record);
-    }
-
-    /**
-     * 对文档全部切块执行 upsert。
-     */
-    public void upsertDocument(DomainModels.KnowledgeDocument document) {
-        for (DomainModels.DocumentChunk chunk : document.chunks()) {
-            upsertChunk(chunk, document);
+        if (persist) {
+            persistToDisk();
         }
     }
 
     /**
-     * 按文档 ID 删除内存点，并尝试从 Qdrant 删除对应点。
+     * 按文档 ID 删除内存点并同步落盘。
      */
     public void deleteByDocumentId(Long documentId) {
         List<String> vectorIds = memoryIndex.values().stream()
@@ -104,12 +150,13 @@ public class VectorIndexService {
         for (String vectorId : vectorIds) {
             memoryIndex.remove(vectorId);
         }
-        deleteFromQdrant(vectorIds);
+        if (!vectorIds.isEmpty()) {
+            persistToDisk();
+        }
     }
 
     /**
-     * 检索：优先 Qdrant；无结果则内存余弦检索，可按 kbId/serviceCodes 过滤。
-     * policy 优先级在内存路径额外 +0.05。
+     * 检索：Faiss IndexFlat 风格精确余弦 + metadata 过滤；policy 额外 +0.05。
      */
     public List<ScoredChunk> search(
             Long kbId,
@@ -120,23 +167,18 @@ public class VectorIndexService {
         float[] queryVector = embeddingClient.embed(query);
         List<ScoredChunk> scored = new ArrayList<>();
 
-        List<ScoredChunk> qdrantHits = searchQdrant(kbId, queryVector, topK * 2, serviceCodes);
-        if (!qdrantHits.isEmpty()) {
-            scored.addAll(qdrantHits);
-        } else {
-            for (VectorRecord record : memoryIndex.values()) {
-                if (kbId != null && !kbId.equals(record.kbId())) {
+        for (VectorRecord record : memoryIndex.values()) {
+            if (kbId != null && !kbId.equals(record.kbId())) {
+                continue;
+            }
+            if (serviceCodes != null && !serviceCodes.isEmpty()) {
+                if (!StringUtils.hasText(record.serviceCode()) || !serviceCodes.contains(record.serviceCode())) {
                     continue;
                 }
-                if (serviceCodes != null && !serviceCodes.isEmpty()) {
-                    if (!StringUtils.hasText(record.serviceCode()) || !serviceCodes.contains(record.serviceCode())) {
-                        continue;
-                    }
-                }
-                double cosine = cosine(queryVector, record.vector());
-                double priorityBoost = "policy".equalsIgnoreCase(record.priority()) ? 0.05 : 0.0;
-                scored.add(new ScoredChunk(record.document(), record.chunk(), cosine + priorityBoost));
             }
+            double cosine = cosine(queryVector, record.vector());
+            double priorityBoost = "policy".equalsIgnoreCase(record.priority()) ? 0.05 : 0.0;
+            scored.add(new ScoredChunk(record.document(), record.chunk(), cosine + priorityBoost));
         }
 
         scored.sort(Comparator.comparing(ScoredChunk::score).reversed());
@@ -146,212 +188,138 @@ public class VectorIndexService {
         return scored.subList(0, topK);
     }
 
-    /** 将向量点 PUT 到 Qdrant；失败仅记 debug，不影响内存索引。 */
-    private void upsertToQdrant(VectorRecord record) {
-        if (!ensureQdrantReady(record.vector().length)) {
-            return;
-        }
-        try {
-            ObjectNode point = objectMapper.createObjectNode();
-            point.put("id", hashId(record.vectorId()));
-            ArrayNode vectorNode = point.putArray("vector");
-            for (float value : record.vector()) {
-                vectorNode.add(value);
-            }
-            ObjectNode payload = point.putObject("payload");
-            payload.put("vector_id", record.vectorId());
-            payload.put("kb_id", record.kbId());
-            payload.put("document_id", record.documentId());
-            payload.put("document_name", record.documentName());
-            payload.put("service_code", record.serviceCode() == null ? "" : record.serviceCode());
-            payload.put("priority", record.priority() == null ? "" : record.priority());
-            payload.put("content", record.content());
-
-            ObjectNode body = objectMapper.createObjectNode();
-            body.putArray("points").add(point);
-
-            Request request = new Request.Builder()
-                    .url(qdrantBase() + "/collections/" + aiProperties.getQdrantCollection() + "/points?wait=true")
-                    .put(RequestBody.create(objectMapper.writeValueAsBytes(body), JSON))
-                    .build();
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    log.debug("Qdrant upsert skipped: HTTP {}", response.code());
-                }
-            }
-        } catch (Exception ex) {
-            log.debug("Qdrant upsert failed: {}", ex.getMessage());
-        }
-    }
-
-    /** 批量删除 Qdrant 点。 */
-    private void deleteFromQdrant(List<String> vectorIds) {
-        if (vectorIds.isEmpty() || !ensureQdrantReady(embeddingClient.dimension())) {
-            return;
-        }
-        try {
-            ObjectNode body = objectMapper.createObjectNode();
-            ArrayNode points = body.putArray("points");
-            for (String vectorId : vectorIds) {
-                points.add(hashId(vectorId));
-            }
-            Request request = new Request.Builder()
-                    .url(qdrantBase() + "/collections/" + aiProperties.getQdrantCollection() + "/points/delete?wait=true")
-                    .post(RequestBody.create(objectMapper.writeValueAsBytes(body), JSON))
-                    .build();
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    log.debug("Qdrant delete skipped: HTTP {}", response.code());
-                }
-            }
-        } catch (Exception ex) {
-            log.debug("Qdrant delete failed: {}", ex.getMessage());
-        }
-    }
-
-    /**
-     * Qdrant 向量搜索；命中后用 payload.vector_id 回查内存记录以还原领域对象。
-     */
-    private List<ScoredChunk> searchQdrant(
-            Long kbId,
-            float[] queryVector,
-            int topK,
-            Set<String> serviceCodes
-    ) {
-        if (!ensureQdrantReady(queryVector.length)) {
-            return List.of();
-        }
-        try {
-            ObjectNode body = objectMapper.createObjectNode();
-            ArrayNode vectorNode = body.putArray("vector");
-            for (float value : queryVector) {
-                vectorNode.add(value);
-            }
-            body.put("limit", topK);
-            body.put("with_payload", true);
-
-            ObjectNode filter = body.putObject("filter");
-            ArrayNode must = filter.putArray("must");
-            if (kbId != null) {
-                ObjectNode kbMust = must.addObject();
-                kbMust.put("key", "kb_id");
-                kbMust.putObject("match").put("value", kbId);
-            }
-            if (serviceCodes != null && !serviceCodes.isEmpty()) {
-                ObjectNode serviceMust = must.addObject();
-                serviceMust.put("key", "service_code");
-                ArrayNode any = serviceMust.putObject("match").putArray("any");
-                for (String code : serviceCodes) {
-                    any.add(code);
-                }
-            }
-            if (must.isEmpty()) {
-                body.remove("filter");
-            }
-
-            Request request = new Request.Builder()
-                    .url(qdrantBase() + "/collections/" + aiProperties.getQdrantCollection() + "/points/search")
-                    .post(RequestBody.create(objectMapper.writeValueAsBytes(body), JSON))
-                    .build();
-
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful() || response.body() == null) {
-                    return List.of();
-                }
-                JsonNode root = objectMapper.readTree(response.body().string());
-                JsonNode result = root.path("result");
-                if (!result.isArray()) {
-                    return List.of();
-                }
-
-                List<ScoredChunk> hits = new ArrayList<>();
-                for (JsonNode item : result) {
-                    String vectorId = item.path("payload").path("vector_id").asText();
-                    // Qdrant 仅存向量与 payload；领域切块仍以内存索引为准
-                    VectorRecord record = memoryIndex.get(vectorId);
-                    if (record == null) {
-                        continue;
-                    }
-                    hits.add(new ScoredChunk(record.document(), record.chunk(), item.path("score").asDouble()));
-                }
-                return hits;
-            }
-        } catch (Exception ex) {
-            log.debug("Qdrant search failed, using memory index: {}", ex.getMessage());
-            return List.of();
-        }
-    }
-
-    /**
-     * 懒检测/创建 Qdrant collection；结果缓存到 {@code qdrantAvailable}。
-     */
-    private boolean ensureQdrantReady(int vectorSize) {
-        if (!StringUtils.hasText(aiProperties.getQdrantUrl())) {
-            return false;
-        }
-        Boolean cached = qdrantAvailable;
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (this) {
-            if (qdrantAvailable != null) {
-                return qdrantAvailable;
-            }
+    /** 将当前索引原子写入本地文件。 */
+    private void persistToDisk() {
+        synchronized (persistLock) {
             try {
-                if (!collectionExists()) {
-                    createCollection(vectorSize);
+                Path dir = indexDir();
+                Files.createDirectories(dir);
+                Path indexFile = indexFile();
+                Path tempFile = dir.resolve("index.json.tmp");
+
+                ObjectNode root = objectMapper.createObjectNode();
+                root.put("engine", "faiss-local-flat-ip");
+                root.put("distance", "cosine");
+                root.put("updatedAt", OffsetDateTime.now().toString());
+                root.put("count", memoryIndex.size());
+                ArrayNode points = root.putArray("points");
+                for (VectorRecord record : memoryIndex.values()) {
+                    points.add(serializePoint(record));
                 }
-                qdrantAvailable = true;
-                log.info("Qdrant collection ready: {}", aiProperties.getQdrantCollection());
+
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(tempFile.toFile(), root);
+                try {
+                    Files.move(tempFile, indexFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (Exception moveEx) {
+                    Files.move(tempFile, indexFile, StandardCopyOption.REPLACE_EXISTING);
+                }
             } catch (Exception ex) {
-                qdrantAvailable = false;
-                log.info("Qdrant unavailable, using in-memory vector index only: {}", ex.getMessage());
-            }
-            return qdrantAvailable;
-        }
-    }
-
-    /** 探测 collection 是否已存在。 */
-    private boolean collectionExists() throws IOException {
-        Request request = new Request.Builder()
-                .url(qdrantBase() + "/collections/" + aiProperties.getQdrantCollection())
-                .get()
-                .build();
-        try (Response response = httpClient.newCall(request).execute()) {
-            return response.isSuccessful();
-        }
-    }
-
-    /** 创建 Cosine 距离的向量 collection。 */
-    private void createCollection(int vectorSize) throws IOException {
-        ObjectNode body = objectMapper.createObjectNode();
-        ObjectNode vectors = body.putObject("vectors");
-        vectors.put("size", vectorSize);
-        vectors.put("distance", "Cosine");
-        Request request = new Request.Builder()
-                .url(qdrantBase() + "/collections/" + aiProperties.getQdrantCollection())
-                .put(RequestBody.create(objectMapper.writeValueAsBytes(body), JSON))
-                .build();
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful() && response.code() != 409) {
-                String bodyText = response.body() == null ? "" : response.body().string();
-                throw new IOException("Create collection failed: HTTP " + response.code() + " " + bodyText);
+                log.warn("Faiss local index persist failed: {}", ex.getMessage());
             }
         }
     }
 
-    /** @return 去掉末尾斜杠的 Qdrant 基础 URL */
-    private String qdrantBase() {
-        String url = aiProperties.getQdrantUrl();
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+    private ObjectNode serializePoint(VectorRecord record) {
+        ObjectNode point = objectMapper.createObjectNode();
+        point.put("vectorId", record.vectorId());
+        point.put("kbId", record.kbId());
+        point.put("documentId", record.documentId());
+        if (record.chunkId() != null) {
+            point.put("chunkId", record.chunkId());
+        }
+        if (record.chunkIndex() != null) {
+            point.put("chunkIndex", record.chunkIndex());
+        }
+        point.put("sectionTitle", record.sectionTitle() == null ? "" : record.sectionTitle());
+        point.put("documentName", record.documentName() == null ? "" : record.documentName());
+        point.put("serviceCode", record.serviceCode() == null ? "" : record.serviceCode());
+        point.put("priority", record.priority() == null ? "" : record.priority());
+        point.put("content", record.content() == null ? "" : record.content());
+        ArrayNode vectorNode = point.putArray("vector");
+        for (float value : record.vector()) {
+            vectorNode.add(value);
+        }
+        return point;
     }
 
-    /** 将字符串 vectorId 映射为 Qdrant 可用的数值 ID。 */
-    private long hashId(String vectorId) {
-        return Math.floorMod(vectorId.hashCode(), Integer.MAX_VALUE);
+    private VectorRecord deserializePoint(JsonNode point) {
+        String vectorId = point.path("vectorId").asText(null);
+        if (!StringUtils.hasText(vectorId)) {
+            return null;
+        }
+        JsonNode vectorNode = point.path("vector");
+        if (!vectorNode.isArray() || vectorNode.isEmpty()) {
+            return null;
+        }
+        float[] vector = new float[vectorNode.size()];
+        for (int i = 0; i < vectorNode.size(); i++) {
+            vector[i] = (float) vectorNode.get(i).asDouble();
+        }
+
+        Long kbId = point.path("kbId").isMissingNode() ? null : point.path("kbId").asLong();
+        Long documentId = point.path("documentId").isMissingNode() ? null : point.path("documentId").asLong();
+        Long chunkId = point.path("chunkId").isMissingNode() || point.path("chunkId").isNull()
+                ? null : point.path("chunkId").asLong();
+        Integer chunkIndex = point.path("chunkIndex").isMissingNode() || point.path("chunkIndex").isNull()
+                ? null : point.path("chunkIndex").asInt();
+        String sectionTitle = point.path("sectionTitle").asText("");
+        String documentName = point.path("documentName").asText("");
+        String serviceCode = point.path("serviceCode").asText("");
+        String priority = point.path("priority").asText("");
+        String content = point.path("content").asText("");
+
+        DomainModels.DocumentChunk chunk = new DomainModels.DocumentChunk(
+                chunkId,
+                documentId,
+                kbId,
+                vectorId,
+                chunkIndex,
+                sectionTitle,
+                priority,
+                content,
+                Map.of()
+        );
+        DomainModels.KnowledgeDocument document = new DomainModels.KnowledgeDocument(
+                documentId,
+                kbId,
+                documentName,
+                "",
+                "",
+                "",
+                "ready",
+                priority,
+                serviceCode,
+                List.of(chunk),
+                OffsetDateTime.now()
+        );
+        return new VectorRecord(
+                vectorId,
+                kbId,
+                documentId,
+                chunkId,
+                chunkIndex,
+                sectionTitle,
+                documentName,
+                serviceCode,
+                priority,
+                content,
+                chunk,
+                document,
+                vector
+        );
     }
 
-    /** 计算两向量余弦相似度。 */
+    private Path indexDir() {
+        String configured = aiProperties.getFaissIndexDir();
+        String path = StringUtils.hasText(configured) ? configured : "data/faiss-index";
+        return Path.of(path);
+    }
+
+    private Path indexFile() {
+        return indexDir().resolve("index.json");
+    }
+
+    /** 计算两向量余弦相似度（等价 Faiss 内积于 L2 归一化向量）。 */
     private double cosine(float[] left, float[] right) {
         int size = Math.min(left.length, right.length);
         double dot = 0.0;
@@ -376,11 +344,14 @@ public class VectorIndexService {
     ) {
     }
 
-    /** 内存索引记录：向量 + 元数据 + 领域对象引用。 */
+    /** 索引记录：向量 + metadata + 领域对象引用。 */
     private record VectorRecord(
             String vectorId,
             Long kbId,
             Long documentId,
+            Long chunkId,
+            Integer chunkIndex,
+            String sectionTitle,
             String documentName,
             String serviceCode,
             String priority,

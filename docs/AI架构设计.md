@@ -32,7 +32,7 @@ flowchart TD
     OBS --> MYSQL
     AGENT --> MYSQL
 
-    KB --> VEC[VectorIndexService<br/>内存余弦 + 可选 Qdrant]
+    KB --> VEC[VectorIndexService<br/>Faiss 本地文件索引]
     RAG --> VEC
     AGENT --> VEC
 
@@ -50,7 +50,7 @@ flowchart TD
 | 后端 | Java 21、Spring Boot 3.3、Spring MVC、Security+JWT、JPA |
 | 流式 | `SseEmitter`（`ChatController` / `ChatService`） |
 | LLM/Embedding | `OpenAiCompatibleChatClient`、`EmbeddingClient`（OkHttp；非 WebClient） |
-| 向量 | `VectorIndexService`：进程内余弦为主，可镜像 Qdrant |
+| 向量 | `VectorIndexService`：Faiss 本地文件模式（IndexFlat 精确余弦落盘，`FAISS_INDEX_DIR`；无需独立向量服务） |
 | 前端 | Vue 3 + TS + Vite + Pinia + Element Plus |
 
 ## 4. 客服问答 RAG 完整流程
