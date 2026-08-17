@@ -56,3 +56,7 @@ ai:
   daily-question-limit: ${DAILY_QUESTION_LIMIT:100}
   default-support-kb-id: ${DEFAULT_SUPPORT_KB_ID:1}
   default-technical-kb-id: ${DEFAULT_TECHNICAL_KB_ID:2}
+  # LLM 超时/限流重试：最多尝试次数（含首次）与指数退避区间
+  llm-max-attempts: ${LLM_MAX_ATTEMPTS:3}
+  llm-retry-base-delay-ms: ${LLM_RETRY_BASE_DELAY_MS:500}
+  llm-retry-max-delay-ms: ${LLM_RETRY_MAX_DELAY_MS:8000}

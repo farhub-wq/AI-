@@ -178,7 +178,7 @@ public class ChatService {
                             streamLocalText(emitter, answerBuilder, buildChitchatFallback(question));
                         }
                     } catch (Exception ex) {
-                        log.warn("闲聊 LLM 调用失败，使用本地闲聊回复。", ex);
+                        log.warn("闲聊 LLM 调用在重试后仍失败，使用本地闲聊回复。", ex);
                         answerStatus = "degraded";
                         streamLocalText(emitter, answerBuilder, buildChitchatFallback(question));
                     }
@@ -211,7 +211,7 @@ public class ChatService {
                             }
                         }
                     } catch (Exception ex) {
-                        log.warn("LLM 流式调用失败，回退到证据摘要回答。", ex);
+                        log.warn("LLM 流式调用在重试后仍失败，回退到证据摘要回答。", ex);
                         answerStatus = "degraded";
                         streamLocalText(emitter, answerBuilder, buildEvidenceFallback(evidenceBundle));
                     }

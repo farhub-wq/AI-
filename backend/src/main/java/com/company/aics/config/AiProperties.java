@@ -35,6 +35,12 @@ public class AiProperties {
     private Long defaultSupportKbId = 1L;
     /** 默认技术文档知识库 ID。 */
     private Long defaultTechnicalKbId = 2L;
+    /** LLM 最大尝试次数（含首次；超时/限流/5xx 可重试）。 */
+    private Integer llmMaxAttempts = 3;
+    /** LLM 重试基础退避毫秒。 */
+    private Long llmRetryBaseDelayMs = 500L;
+    /** LLM 重试退避上限毫秒。 */
+    private Long llmRetryMaxDelayMs = 8000L;
 
     /** @return LLM 基础 URL */
     public String getLlmBaseUrl() {
@@ -164,5 +170,35 @@ public class AiProperties {
     /** @param defaultTechnicalKbId 设置默认技术知识库 ID */
     public void setDefaultTechnicalKbId(Long defaultTechnicalKbId) {
         this.defaultTechnicalKbId = defaultTechnicalKbId;
+    }
+
+    /** @return LLM 最大尝试次数 */
+    public Integer getLlmMaxAttempts() {
+        return llmMaxAttempts;
+    }
+
+    /** @param llmMaxAttempts 设置 LLM 最大尝试次数 */
+    public void setLlmMaxAttempts(Integer llmMaxAttempts) {
+        this.llmMaxAttempts = llmMaxAttempts;
+    }
+
+    /** @return LLM 重试基础退避毫秒 */
+    public Long getLlmRetryBaseDelayMs() {
+        return llmRetryBaseDelayMs;
+    }
+
+    /** @param llmRetryBaseDelayMs 设置基础退避 */
+    public void setLlmRetryBaseDelayMs(Long llmRetryBaseDelayMs) {
+        this.llmRetryBaseDelayMs = llmRetryBaseDelayMs;
+    }
+
+    /** @return LLM 重试退避上限毫秒 */
+    public Long getLlmRetryMaxDelayMs() {
+        return llmRetryMaxDelayMs;
+    }
+
+    /** @param llmRetryMaxDelayMs 设置退避上限 */
+    public void setLlmRetryMaxDelayMs(Long llmRetryMaxDelayMs) {
+        this.llmRetryMaxDelayMs = llmRetryMaxDelayMs;
     }
 }

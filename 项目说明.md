@@ -413,7 +413,8 @@ AI 助手生成了相当比例的初稿（Controller、切块、OkHttp 调用、
 2. **流式输出稳定性**  
    - 强制 HTTP/1.1、合理超时；Windows 下同步链路保留 PowerShell 回退。  
    - SSE 使用命名事件（`message_start` / `token` / `citation` / `message_end` / `error`），前端按帧解析，避免等整段再渲染。  
-   - LLM 失败时降级为证据摘要流式输出，而不是整段挂死。
+   - **超时 / 429 / 5xx**：`LlmCallRetry` 指数退避重试（默认最多 3 次，`LLM_MAX_ATTEMPTS` / `LLM_RETRY_*`）；尊重 `Retry-After`；鉴权与模型不可用不重试。流式仅在尚未吐出 token 时重试，避免半截重复。  
+   - 重试仍失败时降级为证据摘要流式输出（`answerStatus=degraded`），而不是整段挂死。
 
 3. **空检索与弱相关“硬塞”问题**  
    早期存在低于阈值仍软回退进 LLM 的逻辑，易导致「订单发货」类问题串到退货政策并编造细则。已改为：**低于 `RAG_SCORE_THRESHOLD` 一律丢弃 → 标准兜底**，有证据才调模型。

@@ -16,22 +16,27 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
  * OpenAI 兼容 Chat Completions 客户端：支持同步生成与 SSE 流式输出。
- * Windows 上同步调用在 OkHttp 失败时可回退到 PowerShell HttpClient，规避部分 TLS/代理环境问题。
+ * 对超时 / 429 / 5xx 做指数退避重试；Windows 同步调用在 OkHttp 失败时可回退 PowerShell。
  */
 @Component
 public class OpenAiCompatibleChatClient {
 
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleChatClient.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final OkHttpClient httpClient;
@@ -75,7 +80,6 @@ public class OpenAiCompatibleChatClient {
         String requestJson;
 
         try {
-            // 转义非 ASCII，降低部分网关对中文 JSON 的解析问题
             requestJson = objectMapper.writer()
                     .with(JsonWriteFeature.ESCAPE_NON_ASCII.mappedFeature())
                     .writeValueAsString(requestBody);
@@ -83,27 +87,39 @@ public class OpenAiCompatibleChatClient {
             throw new IllegalStateException("序列化 LLM 请求失败。", ex);
         }
 
+        final String payload = requestJson;
+        return LlmCallRetry.execute(
+                "sync",
+                maxAttempts(),
+                baseDelayMs(),
+                maxDelayMs(),
+                () -> generateAnswerOnce(endpoint, payload)
+        );
+    }
+
+    /** 单次同步调用：OkHttp 优先，Windows 可回退 PowerShell。 */
+    private String generateAnswerOnce(String endpoint, String requestJson) {
         try {
             return extractAnswer(executeWithOkHttp(endpoint, requestJson));
+        } catch (AiServiceException ex) {
+            throw ex;
         } catch (IOException ex) {
+            AiServiceException classified = LlmCallRetry.classify(ex);
             if (isWindows()) {
                 try {
                     return extractAnswer(executeWithPowerShell(endpoint, requestJson));
                 } catch (IOException fallbackEx) {
                     fallbackEx.addSuppressed(ex);
-                    throw new IllegalStateException(
-                            "LLM 请求失败（OkHttp 与 PowerShell 均失败）: "
-                                    + fallbackEx.getClass().getSimpleName() + ": " + fallbackEx.getMessage(),
-                            fallbackEx
-                    );
+                    throw LlmCallRetry.classify(fallbackEx);
                 }
             }
-            throw new IllegalStateException("LLM 请求失败: " + ex.getClass().getSimpleName() + ": " + ex.getMessage(), ex);
+            throw classified;
         }
     }
 
     /**
      * 流式调用 chat/completions，按 SSE data 行解析 delta 并回调。
+     * 仅在尚未向客户端吐出任何 token 时重试，避免半截回答重复。
      *
      * @param intentLabel 上游意图分类结果，用于强化 Prompt 约束
      */
@@ -112,7 +128,7 @@ public class OpenAiCompatibleChatClient {
             List<DomainModels.Message> history,
             EvidenceGovernanceService.EvidenceBundle evidenceBundle,
             String intentLabel,
-            java.util.function.Consumer<String> onDelta
+            Consumer<String> onDelta
     ) {
         validateConfiguration();
 
@@ -127,6 +143,49 @@ public class OpenAiCompatibleChatClient {
             throw new IllegalStateException("序列化 LLM 流式请求失败。", ex);
         }
 
+        final String payload = requestJson;
+        int maxAttempts = maxAttempts();
+        RuntimeException last = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            AtomicBoolean emitted = new AtomicBoolean(false);
+            try {
+                streamAnswerOnce(endpoint, payload, delta -> {
+                    emitted.set(true);
+                    onDelta.accept(delta);
+                });
+                return;
+            } catch (RuntimeException ex) {
+                last = ex;
+                AiServiceException classified = LlmCallRetry.classify(ex);
+                boolean canRetry = !emitted.get()
+                        && LlmCallRetry.isRetryable(classified)
+                        && attempt < maxAttempts;
+                if (!canRetry) {
+                    throw classified;
+                }
+                long sleepMs = LlmCallRetry.computeDelayMs(attempt, baseDelayMs(), maxDelayMs(), classified);
+                log.warn(
+                        "LLM stream attempt {}/{} failed before any token ({}), retry in {} ms: {}",
+                        attempt,
+                        maxAttempts,
+                        classified.getErrorType(),
+                        sleepMs,
+                        classified.getMessage()
+                );
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new AiServiceException(AiServiceException.ErrorType.TIMEOUT, "LLM 流式重试等待被中断。", ie);
+                }
+            }
+        }
+        throw last == null
+                ? new AiServiceException(AiServiceException.ErrorType.UPSTREAM, "LLM 流式调用失败。")
+                : LlmCallRetry.classify(last);
+    }
+
+    private void streamAnswerOnce(String endpoint, String requestJson, Consumer<String> onDelta) {
         Request request = new Request.Builder()
                 .url(endpoint)
                 .addHeader("Authorization", "Bearer " + aiProperties.getLlmApiKey())
@@ -138,7 +197,7 @@ public class OpenAiCompatibleChatClient {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
                 String body = response.body() == null ? "" : response.body().string();
-                throw mapUpstreamHttpError(response.code(), body);
+                throw mapUpstreamHttpError(response.code(), body, response.header("Retry-After"));
             }
 
             try (var source = response.body().source()) {
@@ -150,22 +209,24 @@ public class OpenAiCompatibleChatClient {
                     if (!line.startsWith("data:")) {
                         continue;
                     }
-                    String payload = line.substring(5).trim();
-                    if (payload.isEmpty() || "[DONE]".equals(payload)) {
-                        if ("[DONE]".equals(payload)) {
+                    String data = line.substring(5).trim();
+                    if (data.isEmpty() || "[DONE]".equals(data)) {
+                        if ("[DONE]".equals(data)) {
                             break;
                         }
                         continue;
                     }
-                    JsonNode chunk = objectMapper.readTree(payload);
+                    JsonNode chunk = objectMapper.readTree(data);
                     String delta = extractDeltaText(chunk);
                     if (StringUtils.hasText(delta)) {
                         onDelta.accept(delta);
                     }
                 }
             }
+        } catch (AiServiceException ex) {
+            throw ex;
         } catch (IOException ex) {
-            throw new IllegalStateException("LLM 流式读取失败: " + ex.getMessage(), ex);
+            throw LlmCallRetry.classify(ex);
         }
     }
 
@@ -182,27 +243,60 @@ public class OpenAiCompatibleChatClient {
         try (Response response = httpClient.newCall(request).execute()) {
             String body = response.body() == null ? "" : response.body().string();
             if (!response.isSuccessful()) {
-                throw mapUpstreamHttpError(response.code(), body);
+                throw mapUpstreamHttpError(response.code(), body, response.header("Retry-After"));
             }
             return body;
         }
     }
 
     /**
-     * 将上游 HTTP 错误映射为 {@link AiServiceException}，便于降级与全局异常处理。
+     * 将上游 HTTP 错误映射为 {@link AiServiceException}，便于重试与降级。
      */
-    private AiServiceException mapUpstreamHttpError(int code, String body) {
+    private AiServiceException mapUpstreamHttpError(int code, String body, String retryAfterHeader) {
         String message = "LLM 请求失败: HTTP " + code + " " + body;
+        Long retryAfterMs = parseRetryAfterMs(retryAfterHeader);
         if (code == 401 || code == 403) {
-            return new AiServiceException(AiServiceException.ErrorType.AUTH, message, code, null);
+            return new AiServiceException(AiServiceException.ErrorType.AUTH, message, code, retryAfterMs, null);
         }
         if (code == 429) {
-            return new AiServiceException(AiServiceException.ErrorType.RATE_LIMIT, message, code, null);
+            return new AiServiceException(AiServiceException.ErrorType.RATE_LIMIT, message, code, retryAfterMs, null);
         }
-        if (code == 404 || (body != null && body.toLowerCase(Locale.ROOT).contains("model"))) {
-            return new AiServiceException(AiServiceException.ErrorType.MODEL_UNAVAILABLE, message, code, null);
+        if (code == 404 || (body != null && body.toLowerCase(Locale.ROOT).contains("model_not_found"))) {
+            return new AiServiceException(
+                    AiServiceException.ErrorType.MODEL_UNAVAILABLE, message, code, retryAfterMs, null);
         }
-        return new AiServiceException(AiServiceException.ErrorType.UPSTREAM, message, code, null);
+        return new AiServiceException(AiServiceException.ErrorType.UPSTREAM, message, code, retryAfterMs, null);
+    }
+
+    private Long parseRetryAfterMs(String retryAfterHeader) {
+        if (!StringUtils.hasText(retryAfterHeader)) {
+            return null;
+        }
+        try {
+            // Retry-After 可为秒数
+            long seconds = Long.parseLong(retryAfterHeader.trim());
+            if (seconds < 0) {
+                return null;
+            }
+            return seconds * 1000L;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private int maxAttempts() {
+        Integer configured = aiProperties.getLlmMaxAttempts();
+        return configured == null ? 3 : Math.max(1, configured);
+    }
+
+    private long baseDelayMs() {
+        Long configured = aiProperties.getLlmRetryBaseDelayMs();
+        return configured == null ? 500L : Math.max(50L, configured);
+    }
+
+    private long maxDelayMs() {
+        Long configured = aiProperties.getLlmRetryMaxDelayMs();
+        return configured == null ? 8000L : Math.max(baseDelayMs(), configured);
     }
 
     /**
