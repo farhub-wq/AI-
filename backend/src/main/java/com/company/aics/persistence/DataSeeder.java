@@ -138,19 +138,24 @@ public class DataSeeder implements ApplicationRunner {
                 "success",
                 List.of(
                         new DomainModels.ImpactedService("order-service", "订单服务", "负责输出下单成功事件"),
-                        new DomainModels.ImpactedService("notification-service", "通知服务", "消费事件并发送短信"),
                         new DomainModels.ImpactedService("user-service", "用户服务", "提供收件人手机号"),
+                        new DomainModels.ImpactedService("notification-service", "通知服务", "消费事件并发送短信"),
                         new DomainModels.ImpactedService("mall-web", "商城前端", "在成功页展示最终结果")
                 ),
-                List.of(List.of("配置短信模板", "更新前端成功页文案")),
+                List.of(List.of("开放并校验手机号查询", "更新前端成功状态文案")),
                 List.of(
-                        new DomainModels.AgentTask(1L, "定义订单成功事件载荷", "order-service", "serial", List.of(), "下游消费方需要先稳定事件契约"),
-                        new DomainModels.AgentTask(2L, "实现短信消费发送流程", "notification-service", "serial", List.of(1L), "消费订单事件并触发短信"),
-                        new DomainModels.AgentTask(3L, "开放手机号查询能力", "user-service", "serial", List.of(1L), "为通知提供送达目标"),
-                        new DomainModels.AgentTask(4L, "更新前端成功状态文案", "mall-web", "parallel", List.of(), "可与后端模板配置并行推进"),
-                        new DomainModels.AgentTask(5L, "联调与端到端验收", "notification-service", "serial", List.of(2L, 3L, 4L), "验证事件流、短信发送与前端结果展示")
+                        new DomainModels.AgentTask(1L, "定义订单成功事件载荷", "order-service", "serial", List.of(), "上游订单契约应先稳定，再启动下游改造。"),
+                        new DomainModels.AgentTask(2L, "开放并校验手机号查询", "user-service", "parallel", List.of(), "发送链路必须能获取用户手机号。"),
+                        new DomainModels.AgentTask(3L, "实现短信通知消费流程", "notification-service", "serial", List.of(1L, 2L), "通知发送依赖上游事件载荷与收件人数据。"),
+                        new DomainModels.AgentTask(4L, "更新前端成功状态文案", "mall-web", "parallel", List.of(), "前端文案与状态展示通常可并行推进。"),
+                        new DomainModels.AgentTask(5L, "联调与端到端验收", "mall-web", "serial", List.of(1L, 2L, 3L, 4L), "统一验证改动服务、依赖顺序、通知送达与界面表现。")
                 ),
-                List.of("验证订单服务会发布 order.created。", "验证通知服务能成功发送短信。", "验证成功页展示最终送达结果。"),
+                List.of(
+                        "验证订单服务已发布或暴露更新后的契约（如 order.created）。",
+                        "验证通知服务能消费事件并完成短信发送。",
+                        "验证手机号查询与校验规则可用。",
+                        "验证前端成功页展示预期结果文案。"
+                ),
                 List.of(),
                 now().minusHours(2)
         );

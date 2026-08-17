@@ -199,4 +199,16 @@ public final class ApiMappers {
                 item.description()
         );
     }
+
+    /**
+     * 服务依赖边 → 视图。
+     */
+    public static ApiModels.ServiceDependencyView toServiceDependencyView(DomainModels.ServiceDependency dependency) {
+        return new ApiModels.ServiceDependencyView(
+                dependency.fromServiceCode(),
+                dependency.toServiceCode(),
+                dependency.dependencyType(),
+                dependency.dependencyDesc()
+        );
+    }
 }

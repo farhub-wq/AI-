@@ -291,11 +291,13 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 技术文档检索（固定 kbId=2），可按服务码过滤范围。
+     * 技术文档检索：使用配置的技术库 ID（缺失时回退到 kbType=technical_docs）。
+     * 可按服务码过滤范围。
      */
     public List<SearchHit> searchTechnicalDocuments(String requirement, Set<String> scopedServiceCodes, int topK) {
+        Long techKbId = resolveTechnicalKbId();
         Set<String> scope = scopedServiceCodes == null ? Set.of() : scopedServiceCodes;
-        List<VectorIndexService.ScoredChunk> vectorHits = vectorIndexService.search(2L, requirement, topK, scope);
+        List<VectorIndexService.ScoredChunk> vectorHits = vectorIndexService.search(techKbId, requirement, topK, scope);
         if (!vectorHits.isEmpty()) {
             return vectorHits.stream()
                     .map(hit -> new SearchHit(hit.document(), hit.chunk(), hit.score()))
@@ -304,7 +306,7 @@ public class KnowledgeBaseService {
 
         Set<String> keywords = extractKeywords(requirement);
         List<SearchHit> hits = new ArrayList<>();
-        for (DomainModels.KnowledgeDocument document : listDocuments(2L)) {
+        for (DomainModels.KnowledgeDocument document : listDocuments(techKbId)) {
             if (!scope.isEmpty() && !scope.contains(document.serviceCode())) {
                 continue;
             }
@@ -317,6 +319,19 @@ public class KnowledgeBaseService {
         }
         hits.sort(Comparator.comparing(SearchHit::score).reversed());
         return hits.stream().limit(topK).toList();
+    }
+
+    /** 解析技术文档库 ID：优先配置，其次按类型匹配。 */
+    private Long resolveTechnicalKbId() {
+        Long configured = aiProperties.getDefaultTechnicalKbId();
+        if (configured != null && appDataStore.findKnowledgeBase(configured).isPresent()) {
+            return configured;
+        }
+        return appDataStore.listKnowledgeBases().stream()
+                .filter(kb -> "technical_docs".equalsIgnoreCase(kb.kbType()))
+                .map(DomainModels.KnowledgeBase::id)
+                .findFirst()
+                .orElse(configured == null ? 2L : configured);
     }
 
     /**

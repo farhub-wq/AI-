@@ -105,6 +105,11 @@ function statusLabel(status: string) {
           </div>
 
           <template v-if="currentPlan">
+            <div class="status-row">
+              <span class="badge-soft">状态：{{ statusLabel(currentPlan.status) }}</span>
+              <small class="mono">planId={{ currentPlan.planId }}</small>
+            </div>
+
             <div class="impact-grid">
               <article v-for="service in currentPlan.impactedServices" :key="service.serviceCode" class="impact-card">
                 <strong>{{ service.serviceName }}</strong>
@@ -116,6 +121,7 @@ function statusLabel(status: string) {
             <div class="simple-list">
               <h4>可并行任务组</h4>
               <ul>
+                <li v-if="!currentPlan.parallelGroups.length">暂无（本需求可能全为串行依赖）</li>
                 <li v-for="(group, index) in currentPlan.parallelGroups" :key="index">{{ group.join(" / ") }}</li>
               </ul>
             </div>
@@ -128,7 +134,7 @@ function statusLabel(status: string) {
             </div>
 
             <div v-if="currentPlan.missingEvidence.length > 0" class="simple-list warning">
-              <h4>缺失证据</h4>
+              <h4>缺失证据 / 校验提示</h4>
               <ul>
                 <li v-for="item in currentPlan.missingEvidence" :key="item">{{ item }}</li>
               </ul>
@@ -171,6 +177,13 @@ function statusLabel(status: string) {
   display: flex;
   justify-content: space-between;
   gap: 16px;
+  align-items: center;
+}
+
+.status-row {
+  margin-top: 12px;
+  display: flex;
+  gap: 12px;
   align-items: center;
 }
 

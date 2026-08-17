@@ -10,33 +10,35 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * Agent 规划服务：基于技术文档检索与关键词启发，拆解需求为受影响服务、任务、并行组与验收步骤。
- * 结果写入 MySQL（{@link AppDataStore}），状态为 success / partial / failed，取决于证据是否充足。
+ * 需求拆解 Agent（README 第 6 点落地）：
+ * 语义信号抽取 → 技术文档检索 → 服务打分 → 基于服务依赖表建任务 DAG → 并行组 → 后校验落库。
+ * 与客服 RAG（ChatService）隔离，不改写问答主链路。
  */
 @Service
 public class AgentPlannerService {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentPlannerService.class);
+
     private final AppDataStore appDataStore;
     private final KnowledgeBaseService knowledgeBaseService;
 
-    /**
-     * @param appDataStore         MySQL 数据访问门面
-     * @param knowledgeBaseService 知识库检索服务
-     */
     public AgentPlannerService(AppDataStore appDataStore, KnowledgeBaseService knowledgeBaseService) {
         this.appDataStore = appDataStore;
         this.knowledgeBaseService = knowledgeBaseService;
     }
 
     /**
-     * 创建规划：检索技术文档 → 候选服务打分 → 启发加权 → 生成任务与校验步骤并落库。
+     * 创建规划：解析信号 → 检索技术库 → 候选打分 → 任务/依赖 → 并行组 → 校验 → 落库。
      */
     public DomainModels.AgentPlan createPlan(
             Long userId,
@@ -49,12 +51,13 @@ public class AgentPlannerService {
             scopedServiceCodes.stream().filter(StringUtils::hasText).forEach(scope::add);
         }
 
-        String query = requirementTitle + "\n" + requirementContent;
+        RequirementSignals signals = parseSignals(requirementTitle, requirementContent);
+        String query = signals.searchQuery();
         List<KnowledgeBaseService.SearchHit> hits = knowledgeBaseService.searchTechnicalDocuments(query, scope, 12);
         Map<String, DomainModels.ServiceCatalogItem> catalogIndex = knowledgeBaseService.serviceCatalogIndex();
-        Map<String, CandidateScore> candidateMap = new LinkedHashMap<>();
+        List<DomainModels.ServiceDependency> dependencyGraph = appDataStore.listServiceDependencies();
 
-        // 按命中文档的 serviceCode 累加检索分数与理由
+        Map<String, CandidateScore> candidateMap = new LinkedHashMap<>();
         for (KnowledgeBaseService.SearchHit hit : hits) {
             String serviceCode = hit.document().serviceCode();
             if (!StringUtils.hasText(serviceCode) || !catalogIndex.containsKey(serviceCode)) {
@@ -62,12 +65,11 @@ public class AgentPlannerService {
             }
             CandidateScore candidate = candidateMap.computeIfAbsent(serviceCode, ignored -> new CandidateScore());
             candidate.score += hit.score();
-            candidate.reasons.add("命中文档：" + hit.document().fileName());
+            candidate.reasons.add("命中技术文档：" + hit.document().fileName());
         }
 
-        boostByHeuristics(requirementTitle + "\n" + requirementContent, candidateMap, catalogIndex);
+        boostBySignals(signals, candidateMap, catalogIndex);
 
-        // 人工选定范围额外加权，避免检索漏召回
         if (!scope.isEmpty()) {
             for (String serviceCode : scope) {
                 if (!catalogIndex.containsKey(serviceCode)) {
@@ -87,6 +89,10 @@ public class AgentPlannerService {
         if (hits.isEmpty()) {
             missingEvidence.add("未检索到技术文档证据，请补充服务说明、接口文档或事件文档。");
         }
+        if (!signals.actions().isEmpty() || !signals.sideEffects().isEmpty()) {
+            log.info("Agent signals actions={} entities={} sideEffects={}",
+                    signals.actions(), signals.entities(), signals.sideEffects());
+        }
 
         List<DomainModels.ImpactedService> impactedServices = new ArrayList<>();
         for (Map.Entry<String, CandidateScore> entry : sortedCandidates) {
@@ -98,7 +104,6 @@ public class AgentPlannerService {
             ));
         }
 
-        // 无检索命中但有人工范围时，仍输出占位受影响服务并标记证据不足
         if (impactedServices.isEmpty() && !scope.isEmpty()) {
             for (String serviceCode : scope) {
                 DomainModels.ServiceCatalogItem item = catalogIndex.get(serviceCode);
@@ -115,9 +120,11 @@ public class AgentPlannerService {
             }
         }
 
-        List<DomainModels.AgentTask> tasks = buildTasks(impactedServices, requirementContent);
+        List<DomainModels.AgentTask> tasks = buildTasks(impactedServices, signals, dependencyGraph);
         List<List<String>> parallelGroups = buildParallelGroups(tasks);
-        List<String> validationSteps = buildValidationSteps(impactedServices);
+        List<String> validationSteps = buildValidationSteps(impactedServices, signals);
+        missingEvidence.addAll(validatePlan(impactedServices, tasks, parallelGroups, dependencyGraph, signals));
+
         String status = impactedServices.isEmpty()
                 ? "failed"
                 : (missingEvidence.isEmpty() ? "success" : "partial");
@@ -137,9 +144,6 @@ public class AgentPlannerService {
         ));
     }
 
-    /**
-     * 按用户归属获取规划详情。
-     */
     public DomainModels.AgentPlan getPlan(Long userId, Long planId) {
         DomainModels.AgentPlan plan = appDataStore.findAgentPlan(planId)
                 .orElseThrow(() -> new IllegalArgumentException("规划记录不存在。"));
@@ -149,9 +153,6 @@ public class AgentPlannerService {
         return plan;
     }
 
-    /**
-     * 分页列出当前用户的规划（按创建时间倒序）。
-     */
     public List<DomainModels.AgentPlan> listPlans(Long userId, int page, int pageSize) {
         return appDataStore.listAgentPlansByUser(userId).stream()
                 .skip((long) Math.max(page - 1, 0) * pageSize)
@@ -159,146 +160,247 @@ public class AgentPlannerService {
                 .toList();
     }
 
-    /**
-     * 列出服务目录（按 serviceCode 排序）。
-     */
     public List<DomainModels.ServiceCatalogItem> listServiceCatalog() {
         return appDataStore.listServiceCatalog().stream()
                 .sorted(Comparator.comparing(DomainModels.ServiceCatalogItem::serviceCode))
                 .toList();
     }
 
-    /**
-     * 根据需求文本中的业务关键词对候选服务加分。
-     */
-    private void boostByHeuristics(
-            String requirementText,
-            Map<String, CandidateScore> candidateMap,
-            Map<String, DomainModels.ServiceCatalogItem> catalogIndex
-    ) {
-        boostIfContains(requirementText, List.of("order", "orders", "下单", "订单"), "order-service", "需求涉及下单或订单状态", candidateMap, catalogIndex);
-        boostIfContains(requirementText, List.of("sms", "notification", "通知", "短信"), "notification-service", "需求涉及对外通知发送", candidateMap, catalogIndex);
-        boostIfContains(requirementText, List.of("phone", "mobile", "user", "手机号", "用户"), "user-service", "需求依赖用户资料或手机号", candidateMap, catalogIndex);
-        boostIfContains(requirementText, List.of("frontend", "page", "web", "前端", "页面", "提示"), "mall-web", "需求涉及前端文案或交互", candidateMap, catalogIndex);
+    /** 供前端展示服务依赖目录（事件/数据/API）。 */
+    public List<DomainModels.ServiceDependency> listServiceDependencies() {
+        return appDataStore.listServiceDependencies();
     }
 
     /**
-     * 文本命中任一关键词时，为指定服务增加 1.0 分并记录理由。
+     * 轻量语义解析：动作 / 实体 / 副作用信号，驱动检索与启发式（不调用 LLM）。
      */
-    private void boostIfContains(
-            String text,
-            List<String> keywords,
-            String serviceCode,
-            String reason,
+    RequirementSignals parseSignals(String title, String content) {
+        String text = ((title == null ? "" : title) + "\n" + (content == null ? "" : content)).toLowerCase(Locale.ROOT);
+        LinkedHashSet<String> actions = new LinkedHashSet<>();
+        LinkedHashSet<String> entities = new LinkedHashSet<>();
+        LinkedHashSet<String> sideEffects = new LinkedHashSet<>();
+
+        if (containsAny(text, "下单", "订单", "order")) {
+            actions.add("place_order");
+            entities.add("order");
+        }
+        if (containsAny(text, "支付", "payment", "付款")) {
+            actions.add("pay");
+            entities.add("payment");
+        }
+        if (containsAny(text, "退款", "退货", "refund", "return")) {
+            actions.add("refund_or_return");
+            entities.add("order");
+        }
+        if (containsAny(text, "短信", "sms", "通知", "notification", "站内信")) {
+            sideEffects.add("notify");
+            entities.add("notification");
+        }
+        if (containsAny(text, "手机号", "mobile", "phone", "用户")) {
+            entities.add("user");
+        }
+        if (containsAny(text, "前端", "页面", "成功页", "frontend", "web", "文案")) {
+            sideEffects.add("ui_copy");
+            entities.add("frontend");
+        }
+        if (containsAny(text, "事件", "event", "消息")) {
+            entities.add("event");
+        }
+
+        String searchQuery = (title == null ? "" : title) + "\n" + (content == null ? "" : content);
+        if (!actions.isEmpty() || !entities.isEmpty() || !sideEffects.isEmpty()) {
+            searchQuery = searchQuery
+                    + "\n动作:" + String.join(",", actions)
+                    + "\n实体:" + String.join(",", entities)
+                    + "\n副作用:" + String.join(",", sideEffects);
+        }
+        return new RequirementSignals(List.copyOf(actions), List.copyOf(entities), List.copyOf(sideEffects), searchQuery);
+    }
+
+    private void boostBySignals(
+            RequirementSignals signals,
             Map<String, CandidateScore> candidateMap,
             Map<String, DomainModels.ServiceCatalogItem> catalogIndex
+    ) {
+        if (signals.actions().contains("place_order") || signals.entities().contains("order")) {
+            boost(candidateMap, catalogIndex, "order-service", 1.0, "语义信号：涉及下单/订单状态");
+        }
+        if (signals.sideEffects().contains("notify") || signals.entities().contains("notification")) {
+            boost(candidateMap, catalogIndex, "notification-service", 1.0, "语义信号：涉及对外通知/短信");
+        }
+        if (signals.entities().contains("user") || signals.sideEffects().contains("notify")) {
+            boost(candidateMap, catalogIndex, "user-service", 0.8, "语义信号：通知链路需要用户资料/手机号");
+        }
+        if (signals.sideEffects().contains("ui_copy") || signals.entities().contains("frontend")) {
+            boost(candidateMap, catalogIndex, "mall-web", 0.8, "语义信号：涉及前端文案或成功页");
+        }
+        if (signals.actions().contains("refund_or_return")) {
+            boost(candidateMap, catalogIndex, "order-service", 0.6, "语义信号：涉及退款/退货状态");
+            boost(candidateMap, catalogIndex, "notification-service", 0.5, "语义信号：退款结果可能需通知用户");
+        }
+    }
+
+    private void boost(
+            Map<String, CandidateScore> candidateMap,
+            Map<String, DomainModels.ServiceCatalogItem> catalogIndex,
+            String serviceCode,
+            double delta,
+            String reason
     ) {
         if (!catalogIndex.containsKey(serviceCode)) {
             return;
         }
-        boolean matched = keywords.stream().anyMatch(text::contains);
-        if (matched) {
-            CandidateScore candidate = candidateMap.computeIfAbsent(serviceCode, ignored -> new CandidateScore());
-            candidate.score += 1.0;
-            candidate.reasons.add(reason);
-        }
+        CandidateScore candidate = candidateMap.computeIfAbsent(serviceCode, ignored -> new CandidateScore());
+        candidate.score += delta;
+        candidate.reasons.add(reason);
     }
 
     /**
-     * 按受影响服务生成实施任务，并追加端到端联调验收任务。
+     * 两阶段建任务：先为每个受影响服务建节点，再按依赖表与领域规则挂边（避免排序导致 dependsOn 丢失）。
      */
-    private List<DomainModels.AgentTask> buildTasks(List<DomainModels.ImpactedService> impactedServices, String requirementContent) {
-        List<DomainModels.AgentTask> tasks = new ArrayList<>();
-        Map<String, Long> taskIds = new LinkedHashMap<>();
-        String loweredRequirement = requirementContent.toLowerCase();
+    private List<DomainModels.AgentTask> buildTasks(
+            List<DomainModels.ImpactedService> impactedServices,
+            RequirementSignals signals,
+            List<DomainModels.ServiceDependency> dependencyGraph
+    ) {
+        Map<String, Long> serviceTaskIds = new LinkedHashMap<>();
+        Map<String, MutableTask> draftByService = new LinkedHashMap<>();
 
-        for (DomainModels.ImpactedService impactedService : impactedServices) {
-            String serviceCode = impactedService.serviceCode();
-            DomainModels.AgentTask task;
-
-            // 订单服务通常作为上游契约，串行优先稳定
-            if ("order-service".equals(serviceCode)) {
-                task = new DomainModels.AgentTask(
-                        appDataStore.nextAgentTaskId(),
-                        loweredRequirement.contains("sms") || requirementContent.contains("短信")
-                                ? "定义订单成功事件载荷"
-                                : "调整订单侧接口或事件契约",
-                        serviceCode,
-                        "serial",
-                        List.of(),
-                        "上游订单契约应先稳定，再启动下游改造。"
-                );
-            } else if ("notification-service".equals(serviceCode)) {
-                // 通知依赖订单事件与用户手机号
-                List<Long> dependsOn = new ArrayList<>();
-                if (taskIds.containsKey("order-service")) {
-                    dependsOn.add(taskIds.get("order-service"));
-                }
-                if (taskIds.containsKey("user-service")) {
-                    dependsOn.add(taskIds.get("user-service"));
-                }
-                task = new DomainModels.AgentTask(
-                        appDataStore.nextAgentTaskId(),
-                        loweredRequirement.contains("sms") || requirementContent.contains("短信")
-                                ? "实现短信通知消费流程"
-                                : "实现通知消费与发送流程",
-                        serviceCode,
-                        "serial",
-                        dependsOn,
-                        "通知发送依赖上游事件载荷与收件人数据。"
-                );
-            } else if ("user-service".equals(serviceCode)) {
-                task = new DomainModels.AgentTask(
-                        appDataStore.nextAgentTaskId(),
-                        "开放并校验手机号查询",
-                        serviceCode,
-                        "parallel",
-                        List.of(),
-                        "发送链路必须能获取用户手机号。"
-                );
-            } else if ("mall-web".equals(serviceCode)) {
-                task = new DomainModels.AgentTask(
-                        appDataStore.nextAgentTaskId(),
-                        "更新前端成功状态文案",
-                        serviceCode,
-                        "parallel",
-                        List.of(),
-                        "前端文案与状态展示通常可并行推进。"
-                );
-            } else {
-                task = new DomainModels.AgentTask(
-                        appDataStore.nextAgentTaskId(),
-                        "评审并更新" + impactedService.serviceName(),
-                        serviceCode,
-                        "serial",
-                        List.of(),
-                        "需要补充更多服务级证据后再细化实施步骤。"
-                );
-            }
-
-            tasks.add(task);
-            taskIds.put(serviceCode, task.taskId());
+        for (DomainModels.ImpactedService impacted : impactedServices) {
+            String code = impacted.serviceCode();
+            long taskId = appDataStore.nextAgentTaskId();
+            serviceTaskIds.put(code, taskId);
+            draftByService.put(code, createDraftTask(taskId, code, signals));
         }
 
-        // 末尾统一联调任务依赖此前全部任务
+        // 基于服务依赖表：from → to 表示 to 依赖 from 先完成
+        for (DomainModels.ServiceDependency edge : dependencyGraph) {
+            Long fromTask = serviceTaskIds.get(edge.fromServiceCode());
+            Long toTask = serviceTaskIds.get(edge.toServiceCode());
+            if (fromTask == null || toTask == null) {
+                continue;
+            }
+            MutableTask toDraft = draftByService.get(edge.toServiceCode());
+            if (toDraft == null) {
+                continue;
+            }
+            if (!toDraft.dependsOn.contains(fromTask)) {
+                toDraft.dependsOn.add(fromTask);
+            }
+            // 有入边的任务默认改为串行，避免强依赖误标并行
+            if (!"order-service".equals(edge.toServiceCode()) || toDraft.dependsOn.size() > 0) {
+                if ("event".equalsIgnoreCase(edge.dependencyType())
+                        || "data".equalsIgnoreCase(edge.dependencyType())
+                        || "api".equalsIgnoreCase(edge.dependencyType())) {
+                    // mall-web 若仅配置/展示依赖，可保持并行准备；事件/数据消费方必须串行
+                    if (!"mall-web".equals(edge.toServiceCode()) || "event".equalsIgnoreCase(edge.dependencyType())) {
+                        if (!"mall-web".equals(edge.toServiceCode())) {
+                            toDraft.executionMode = "serial";
+                        }
+                    }
+                    toDraft.reason = toDraft.reason + "；依赖边[" + edge.dependencyType() + "]："
+                            + edge.fromServiceCode() + " → " + edge.toServiceCode();
+                }
+            }
+        }
+
+        // 领域兜底：通知必须挂订单事件与用户数据（即便依赖表缺失）
+        if (draftByService.containsKey("notification-service")) {
+            MutableTask notify = draftByService.get("notification-service");
+            notify.executionMode = "serial";
+            if (serviceTaskIds.containsKey("order-service") && !notify.dependsOn.contains(serviceTaskIds.get("order-service"))) {
+                notify.dependsOn.add(serviceTaskIds.get("order-service"));
+            }
+            if (serviceTaskIds.containsKey("user-service") && !notify.dependsOn.contains(serviceTaskIds.get("user-service"))) {
+                notify.dependsOn.add(serviceTaskIds.get("user-service"));
+            }
+        }
+        if (draftByService.containsKey("order-service")) {
+            draftByService.get("order-service").executionMode = "serial";
+        }
+        if (draftByService.containsKey("user-service")) {
+            MutableTask user = draftByService.get("user-service");
+            // 用户资料准备通常可与前端并行，除非已有强制入边
+            if (user.dependsOn.isEmpty()) {
+                user.executionMode = "parallel";
+            }
+        }
+        if (draftByService.containsKey("mall-web")) {
+            MutableTask web = draftByService.get("mall-web");
+            // 前端文案可与后端契约准备并行；不挂强串行边
+            web.dependsOn.clear();
+            web.executionMode = "parallel";
+            web.reason = "前端成功页文案可与后端契约/手机号能力并行推进。";
+        }
+
+        List<DomainModels.AgentTask> tasks = new ArrayList<>();
+        for (DomainModels.ImpactedService impacted : impactedServices) {
+            MutableTask draft = draftByService.get(impacted.serviceCode());
+            if (draft != null) {
+                tasks.add(draft.toImmutable());
+            }
+        }
+
         if (!tasks.isEmpty()) {
-            List<Long> dependsOn = tasks.stream().map(DomainModels.AgentTask::taskId).toList();
+            List<Long> dependsOnAll = tasks.stream().map(DomainModels.AgentTask::taskId).toList();
             tasks.add(new DomainModels.AgentTask(
                     appDataStore.nextAgentTaskId(),
                     "联调与端到端验收",
                     tasks.getLast().targetService(),
                     "serial",
-                    dependsOn,
-                    "统一验证改动服务、依赖顺序与界面表现。"
+                    dependsOnAll,
+                    "统一验证改动服务、依赖顺序、通知送达与界面表现。"
             ));
         }
-
         return tasks;
     }
 
-    /**
-     * 收集可并行且无依赖的任务名，组成并行组列表。
-     */
+    private MutableTask createDraftTask(long taskId, String serviceCode, RequirementSignals signals) {
+        boolean sms = signals.sideEffects().contains("notify");
+        return switch (serviceCode) {
+            case "order-service" -> new MutableTask(
+                    taskId,
+                    sms ? "定义订单成功事件载荷" : "调整订单侧接口或事件契约",
+                    serviceCode,
+                    "serial",
+                    new ArrayList<>(),
+                    "上游订单契约应先稳定，再启动下游改造。"
+            );
+            case "notification-service" -> new MutableTask(
+                    taskId,
+                    sms ? "实现短信通知消费流程" : "实现通知消费与发送流程",
+                    serviceCode,
+                    "serial",
+                    new ArrayList<>(),
+                    "通知发送依赖上游事件载荷与收件人数据。"
+            );
+            case "user-service" -> new MutableTask(
+                    taskId,
+                    "开放并校验手机号查询",
+                    serviceCode,
+                    "parallel",
+                    new ArrayList<>(),
+                    "发送链路必须能获取用户手机号。"
+            );
+            case "mall-web" -> new MutableTask(
+                    taskId,
+                    "更新前端成功状态文案",
+                    serviceCode,
+                    "parallel",
+                    new ArrayList<>(),
+                    "前端文案与状态展示通常可并行推进。"
+            );
+            default -> new MutableTask(
+                    taskId,
+                    "评审并更新" + serviceCode,
+                    serviceCode,
+                    "serial",
+                    new ArrayList<>(),
+                    "需要补充更多服务级证据后再细化实施步骤。"
+            );
+        };
+    }
+
     private List<List<String>> buildParallelGroups(List<DomainModels.AgentTask> tasks) {
         List<String> group = tasks.stream()
                 .filter(task -> "parallel".equalsIgnoreCase(task.executionMode()))
@@ -308,37 +410,214 @@ public class AgentPlannerService {
         return group.isEmpty() ? List.of() : List.of(group);
     }
 
-    /**
-     * 按受影响服务生成对应验收步骤清单。
-     */
-    private List<String> buildValidationSteps(List<DomainModels.ImpactedService> impactedServices) {
+    private List<String> buildValidationSteps(
+            List<DomainModels.ImpactedService> impactedServices,
+            RequirementSignals signals
+    ) {
         List<String> steps = new ArrayList<>();
         if (impactedServices.stream().anyMatch(item -> "order-service".equals(item.serviceCode()))) {
-            steps.add("验证订单服务已发布或暴露更新后的契约。");
+            steps.add("验证订单服务已发布或暴露更新后的契约（如 order.created）。");
         }
         if (impactedServices.stream().anyMatch(item -> "notification-service".equals(item.serviceCode()))) {
-            steps.add("验证通知服务能消费事件并完成发送。");
+            steps.add(signals.sideEffects().contains("notify")
+                    ? "验证通知服务能消费事件并完成短信发送。"
+                    : "验证通知服务能消费事件并完成发送。");
         }
         if (impactedServices.stream().anyMatch(item -> "user-service".equals(item.serviceCode()))) {
-            steps.add("验证手机号查询与校验规则。");
+            steps.add("验证手机号查询与校验规则可用。");
         }
         if (impactedServices.stream().anyMatch(item -> "mall-web".equals(item.serviceCode()))) {
             steps.add("验证前端成功页展示预期结果文案。");
         }
         if (steps.isEmpty()) {
             steps.add("补充更多技术证据后重新执行拆解。");
+        } else {
+            steps.add("按任务 dependsOn 顺序联调，确认无可并行误判的强依赖。");
         }
         return steps;
     }
 
-    /** @return 东八区当前时间 */
+    /**
+     * 后校验：强依赖不得进入并行组；通知缺上游则记入缺失证据；简单环检测。
+     */
+    private List<String> validatePlan(
+            List<DomainModels.ImpactedService> impactedServices,
+            List<DomainModels.AgentTask> tasks,
+            List<List<String>> parallelGroups,
+            List<DomainModels.ServiceDependency> dependencyGraph,
+            RequirementSignals signals
+    ) {
+        List<String> issues = new ArrayList<>();
+        Set<String> impactedCodes = new LinkedHashSet<>();
+        for (DomainModels.ImpactedService item : impactedServices) {
+            impactedCodes.add(item.serviceCode());
+        }
+
+        Map<Long, DomainModels.AgentTask> byId = new LinkedHashMap<>();
+        for (DomainModels.AgentTask task : tasks) {
+            byId.put(task.taskId(), task);
+        }
+
+        Set<String> parallelNames = new LinkedHashSet<>();
+        for (List<String> group : parallelGroups) {
+            parallelNames.addAll(group);
+        }
+        for (DomainModels.AgentTask task : tasks) {
+            if (parallelNames.contains(task.taskName()) && !task.dependsOn().isEmpty()) {
+                issues.add("校验失败：任务「" + task.taskName() + "」存在依赖却进入并行组。");
+            }
+        }
+
+        if (signals.sideEffects().contains("notify")) {
+            if (impactedCodes.contains("notification-service") && !impactedCodes.contains("order-service")) {
+                issues.add("校验提示：通知改造通常需要订单侧事件契约，当前未召回 order-service。");
+            }
+            if (impactedCodes.contains("notification-service") && !impactedCodes.contains("user-service")) {
+                issues.add("校验提示：短信发送通常需要用户手机号能力，当前未召回 user-service。");
+            }
+            DomainModels.AgentTask notifyTask = tasks.stream()
+                    .filter(task -> "notification-service".equals(task.targetService()))
+                    .filter(task -> !task.taskName().contains("联调"))
+                    .findFirst()
+                    .orElse(null);
+            if (notifyTask != null && notifyTask.dependsOn().isEmpty()) {
+                issues.add("校验失败：通知任务缺少上游 dependsOn，串行关系可能丢失。");
+            }
+        }
+
+        // 依赖表中两端都在影响集，但任务边缺失时提示
+        Map<String, Long> serviceToTask = new LinkedHashMap<>();
+        for (DomainModels.AgentTask task : tasks) {
+            if (!task.taskName().contains("联调")) {
+                serviceToTask.putIfAbsent(task.targetService(), task.taskId());
+            }
+        }
+        for (DomainModels.ServiceDependency edge : dependencyGraph) {
+            if (!impactedCodes.contains(edge.fromServiceCode()) || !impactedCodes.contains(edge.toServiceCode())) {
+                continue;
+            }
+            if ("config".equalsIgnoreCase(edge.dependencyType())) {
+                continue;
+            }
+            Long fromId = serviceToTask.get(edge.fromServiceCode());
+            Long toId = serviceToTask.get(edge.toServiceCode());
+            if (fromId == null || toId == null) {
+                continue;
+            }
+            // mall-web 展示依赖允许不挂硬边
+            if ("mall-web".equals(edge.toServiceCode())) {
+                continue;
+            }
+            DomainModels.AgentTask toTask = byId.get(toId);
+            if (toTask != null && !toTask.dependsOn().contains(fromId)) {
+                issues.add("校验提示：服务依赖 " + edge.fromServiceCode() + "→" + edge.toServiceCode()
+                        + "（" + edge.dependencyType() + "）未完整体现为任务边。");
+            }
+        }
+
+        if (hasCycle(tasks)) {
+            issues.add("校验失败：任务依赖图存在环，请检查服务依赖配置。");
+        }
+        return issues;
+    }
+
+    private boolean hasCycle(List<DomainModels.AgentTask> tasks) {
+        Map<Long, List<Long>> graph = new LinkedHashMap<>();
+        for (DomainModels.AgentTask task : tasks) {
+            graph.put(task.taskId(), task.dependsOn());
+        }
+        Set<Long> visiting = new LinkedHashSet<>();
+        Set<Long> visited = new LinkedHashSet<>();
+        for (Long node : graph.keySet()) {
+            if (dfsCycle(node, graph, visiting, visited)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean dfsCycle(
+            Long node,
+            Map<Long, List<Long>> graph,
+            Set<Long> visiting,
+            Set<Long> visited
+    ) {
+        if (visited.contains(node)) {
+            return false;
+        }
+        if (!visiting.add(node)) {
+            return true;
+        }
+        for (Long parent : graph.getOrDefault(node, List.of())) {
+            // dependsOn 指向前置任务：边方向 parent -> node，环检测沿前置回溯
+            if (dfsCycle(parent, graph, visiting, visited)) {
+                return true;
+            }
+        }
+        visiting.remove(node);
+        visited.add(node);
+        return false;
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private OffsetDateTime now() {
         return OffsetDateTime.now(ZoneOffset.ofHours(8));
     }
 
-    /** 候选服务累计分数与命中理由。 */
+    record RequirementSignals(
+            List<String> actions,
+            List<String> entities,
+            List<String> sideEffects,
+            String searchQuery
+    ) {
+    }
+
     private static final class CandidateScore {
         private double score;
         private final Set<String> reasons = new LinkedHashSet<>();
+    }
+
+    private static final class MutableTask {
+        private final long taskId;
+        private String taskName;
+        private final String targetService;
+        private String executionMode;
+        private final List<Long> dependsOn;
+        private String reason;
+
+        private MutableTask(
+                long taskId,
+                String taskName,
+                String targetService,
+                String executionMode,
+                List<Long> dependsOn,
+                String reason
+        ) {
+            this.taskId = taskId;
+            this.taskName = taskName;
+            this.targetService = targetService;
+            this.executionMode = executionMode;
+            this.dependsOn = dependsOn;
+            this.reason = reason;
+        }
+
+        private DomainModels.AgentTask toImmutable() {
+            return new DomainModels.AgentTask(
+                    taskId,
+                    taskName,
+                    targetService,
+                    executionMode,
+                    List.copyOf(dependsOn),
+                    reason
+            );
+        }
     }
 }

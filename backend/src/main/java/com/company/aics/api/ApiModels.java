@@ -293,4 +293,13 @@ public final class ApiModels {
             String description
     ) {
     }
+
+    /** 服务依赖边视图（供 Agent 页展示串行依据）。 */
+    public record ServiceDependencyView(
+            String fromServiceCode,
+            String toServiceCode,
+            String dependencyType,
+            String dependencyDesc
+    ) {
+    }
 }

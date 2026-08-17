@@ -400,6 +400,12 @@ public class AppDataStore {
         return mapper.toServiceDependency(serviceDependencyRepository.save(entity));
     }
 
+    /** 列出全部服务依赖边（供 Agent 建任务图）。 */
+    @Transactional(readOnly = true)
+    public List<DomainModels.ServiceDependency> listServiceDependencies() {
+        return serviceDependencyRepository.findAll().stream().map(mapper::toServiceDependency).toList();
+    }
+
     /**
      * 新建或更新 Agent 规划；结构化字段写入 plan_json。
      */

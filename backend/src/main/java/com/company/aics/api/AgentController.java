@@ -80,6 +80,16 @@ public class AgentController {
     }
 
     /**
+     * 列出服务依赖边（事件/数据/API），便于前端理解串行依据。
+     */
+    @GetMapping("/service-dependencies")
+    public ApiEnvelope<List<ApiModels.ServiceDependencyView>> serviceDependencies() {
+        return ApiEnvelope.success(
+                agentPlannerService.listServiceDependencies().stream().map(ApiMappers::toServiceDependencyView).toList()
+        );
+    }
+
+    /**
      * 分页列出当前用户的规划摘要。
      */
     @GetMapping("/plans")
