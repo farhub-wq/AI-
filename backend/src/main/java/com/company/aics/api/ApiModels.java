@@ -258,11 +258,17 @@ public final class ApiModels {
     ) {
     }
 
-    /** Agent 需求拆解请求。 */
+    /** Agent 需求拆解 / 变更规划请求（变更单字段可选，兼容旧客户端）。 */
     public record AgentDecomposeRequest(
             @NotBlank @Size(max = 255) String requirementTitle,
             @NotBlank @Size(max = 5000) String requirementContent,
-            @Valid DocumentScope documentScope
+            @Valid DocumentScope documentScope,
+            /** 变更单号，如 CHG-2026-001。 */
+            @Size(max = 64) String changeTicketId,
+            /** 优先级：P0 / P1 / P2。 */
+            @Size(max = 8) String priority,
+            /** 提出人。 */
+            @Size(max = 64) String requester
     ) {
     }
 
@@ -274,6 +280,14 @@ public final class ApiModels {
     ) {
     }
 
+    /** 技术文档命中证据视图。 */
+    public record AgentEvidenceHitView(
+            String fileName,
+            String serviceCode,
+            double score
+    ) {
+    }
+
     /** Agent 任务视图。 */
     public record AgentTaskView(
             Long taskId,
@@ -281,7 +295,9 @@ public final class ApiModels {
             String targetService,
             String executionMode,
             List<Long> dependsOn,
-            String reason
+            String reason,
+            String ownerTeam,
+            String dependencyType
     ) {
     }
 
@@ -295,7 +311,7 @@ public final class ApiModels {
     ) {
     }
 
-    /** 规划详情视图。 */
+    /** 规划详情视图（含生产向变更单与评审字段）。 */
     public record AgentPlanDetailView(
             Long planId,
             String requirementTitle,
@@ -306,7 +322,14 @@ public final class ApiModels {
             List<AgentTaskView> tasks,
             List<String> validationSteps,
             List<String> missingEvidence,
-            OffsetDateTime createdAt
+            OffsetDateTime createdAt,
+            String changeTicketId,
+            String priority,
+            String requester,
+            List<AgentEvidenceHitView> evidenceHits,
+            List<ServiceDependencyView> dependencyEdgesUsed,
+            List<String> suggestedReleaseOrder,
+            List<String> reviewChecklist
     ) {
     }
 
@@ -330,7 +353,7 @@ public final class ApiModels {
     ) {
     }
 
-    /** 服务依赖边视图（供 Agent 页展示串行依据）。 */
+    /** 服务依赖边视图（供变更规划页展示串行依据）。 */
     public record ServiceDependencyView(
             String fromServiceCode,
             String toServiceCode,

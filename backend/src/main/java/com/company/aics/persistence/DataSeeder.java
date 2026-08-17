@@ -145,11 +145,11 @@ public class DataSeeder implements ApplicationRunner {
                 ),
                 List.of(List.of("开放并校验手机号查询", "更新前端成功状态文案")),
                 List.of(
-                        new DomainModels.AgentTask(1L, "定义订单成功事件载荷", "order-service", "serial", List.of(), "上游订单契约应先稳定，再启动下游改造。"),
-                        new DomainModels.AgentTask(2L, "开放并校验手机号查询", "user-service", "parallel", List.of(), "发送链路必须能获取用户手机号。"),
-                        new DomainModels.AgentTask(3L, "实现短信通知消费流程", "notification-service", "serial", List.of(1L, 2L), "通知发送依赖上游事件载荷与收件人数据。"),
-                        new DomainModels.AgentTask(4L, "更新前端成功状态文案", "mall-web", "parallel", List.of(), "前端文案与状态展示通常可并行推进。"),
-                        new DomainModels.AgentTask(5L, "联调与端到端验收", "mall-web", "serial", List.of(1L, 2L, 3L, 4L), "统一验证改动服务、依赖顺序、通知送达与界面表现。")
+                        new DomainModels.AgentTask(1L, "定义订单成功事件载荷", "order-service", "serial", List.of(), "上游订单契约应先稳定，再启动下游改造。", "交易中台", null),
+                        new DomainModels.AgentTask(2L, "开放并校验手机号查询", "user-service", "parallel", List.of(), "发送链路必须能获取用户手机号。", "用户中台", "data"),
+                        new DomainModels.AgentTask(3L, "实现短信通知消费流程", "notification-service", "serial", List.of(1L, 2L), "通知发送依赖上游事件载荷与收件人数据。", "触达中台", "event"),
+                        new DomainModels.AgentTask(4L, "更新前端成功状态文案", "mall-web", "parallel", List.of(), "前端文案与状态展示通常可并行推进。", "商城前端", "config"),
+                        new DomainModels.AgentTask(5L, "联调与端到端验收", "mall-web", "serial", List.of(1L, 2L, 3L, 4L), "统一验证改动服务、依赖顺序、通知送达与界面表现。", "平台联调", "api")
                 ),
                 List.of(
                         "验证订单服务已发布或暴露更新后的契约（如 order.created）。",
@@ -158,7 +158,27 @@ public class DataSeeder implements ApplicationRunner {
                         "验证前端成功页展示预期结果文案。"
                 ),
                 List.of(),
-                now().minusHours(2)
+                now().minusHours(2),
+                "CHG-DEMO-001",
+                "P1",
+                "演示用户",
+                List.of(
+                        new DomainModels.AgentEvidenceHit("订单服务-下单接口.md", "order-service", 0.9),
+                        new DomainModels.AgentEvidenceHit("通知服务-短信事件.md", "notification-service", 0.88)
+                ),
+                List.of(
+                        new DomainModels.ServiceDependency(null, "order-service", "notification-service", "event", "下单成功事件驱动短信"),
+                        new DomainModels.ServiceDependency(null, "user-service", "notification-service", "data", "通知需要用户手机号"),
+                        new DomainModels.ServiceDependency(null, "order-service", "mall-web", "api", "前端展示下单结果")
+                ),
+                List.of("order-service", "user-service", "notification-service", "mall-web"),
+                List.of(
+                        "确认影响面服务列表与业务方/架构师对齐（共 4 个服务）。",
+                        "复核依赖边是否完整（本计划引用 3 条依赖）。",
+                        "按「建议发布顺序」安排合并与灰度，禁止下游先于上游合入强依赖契约。",
+                        "准备回滚点：事件契约、短信开关、前端文案开关。",
+                        "联调通过后再关闭变更单（含端到端验收任务）。"
+                )
         );
         appDataStore.saveAgentPlan(plan);
 

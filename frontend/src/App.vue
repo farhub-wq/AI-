@@ -17,7 +17,7 @@ const menuItems = [
   { label: "智能对话", path: "/chat" },
   { label: "知识库管理", path: "/knowledge-bases" },
   { label: "管理后台", path: "/admin" },
-  { label: "需求拆解 Agent", path: "/agent" }
+  { label: "研发变更规划", path: "/agent" }
 ]
 
 /** 是否已登录（内存 token 或双令牌本地会话） */

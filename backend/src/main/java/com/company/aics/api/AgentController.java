@@ -15,8 +15,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Agent 规划 API：需求拆解、规划详情/列表、服务目录查询。
- * 拆解结果含影响服务、并行组、任务与缺失证据提示。
+ * 研发变更规划 API：变更需求拆解、规划详情/列表、服务目录与依赖查询。
+ * 拆解结果含影响服务、并行组、任务 DAG、建议发布顺序与人工评审清单。
  */
 @RestController
 @RequestMapping("/api/v1/agent")
@@ -44,7 +44,10 @@ public class AgentController {
                 currentUser.userId(),
                 request.requirementTitle(),
                 request.requirementContent(),
-                request.documentScope() == null ? List.of() : request.documentScope().serviceCodes()
+                request.documentScope() == null ? List.of() : request.documentScope().serviceCodes(),
+                request.changeTicketId(),
+                request.priority(),
+                request.requester()
         );
         return ApiEnvelope.success(new ApiModels.AgentPlanCreateResponse(
                 plan.id(),

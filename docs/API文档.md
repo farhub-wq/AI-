@@ -280,9 +280,11 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 
 ---
 
-## 8. Agent 拆解（Read.md 加分项 6）
+## 8. 研发变更规划（Read.md 加分项 6）
 
-### 8.1 创建拆解
+定位：面向研发团队的**变更规划工作台**（侧栏「研发变更规划」），回答「改哪些微服务 / 谁可并行 / 谁必须串行」；仅输出规划与 DAG，不自动改多仓代码。
+
+### 8.1 创建变更规划
 
 `POST /agent/decompose`
 
@@ -292,9 +294,14 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
   "requirementContent": "用户下单完成后，系统应自动向用户手机号发送短信，并在前端成功页展示发送结果。",
   "documentScope": {
     "serviceCodes": ["order-service", "user-service", "notification-service", "mall-web"]
-  }
+  },
+  "changeTicketId": "CHG-2026-001",
+  "priority": "P1",
+  "requester": "交易产品"
 }
 ```
+
+`changeTicketId` / `priority` / `requester` 为可选；旧客户端只传标题正文与服务范围仍可用。
 
 响应摘要示例：
 
@@ -319,7 +326,18 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 
 `GET /agent/plans/{planId}`
 
-`data` 含：`tasks[]`（`taskId` / `taskName` / `targetService` / `executionMode` / `dependsOn` / `reason`）、`validationSteps`、`missingEvidence`、`parallelGroups`。
+`data` 在原有字段外增量：
+
+| 字段 | 说明 |
+| --- | --- |
+| `changeTicketId` / `priority` / `requester` | 变更单元数据 |
+| `evidenceHits[]` | 文档命中：`fileName` / `serviceCode` / `score` |
+| `dependencyEdgesUsed[]` | 本计划用到的依赖边 |
+| `suggestedReleaseOrder[]` | 建议合并/发布顺序（服务码） |
+| `reviewChecklist[]` | 人工评审清单 |
+| `tasks[]` | 另含 `ownerTeam`、`dependencyType` |
+
+原有：`tasks`（`taskId` / `taskName` / `targetService` / `executionMode` / `dependsOn` / `reason`）、`validationSteps`、`missingEvidence`、`parallelGroups`。
 
 ### 8.3 规划历史
 
@@ -362,4 +380,4 @@ data: {"code":"STREAM_FAILED","message":"...","traceId":"..."}
 
 1. 向量检索与 LLM 仅在后端调用，前端不持有 API Key。  
 2. SSE 与 JSON 接口分离；引用在 `citation` 事件一次性下发。  
-3. 问答与 Agent 规划均落库，支持历史回放。
+3. 问答与变更规划均落库，支持历史回放。

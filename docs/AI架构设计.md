@@ -6,7 +6,7 @@
 本项目 AI 架构同时覆盖：
 
 1. 企业知识客服问答（RAG + SSE）
-2. 研发需求拆解 Agent（技术库检索 + 服务依赖 DAG）
+2. 研发变更规划 Agent（技术库检索 + 服务依赖 DAG）
 
 架构目标：
 
@@ -101,39 +101,61 @@ sequenceDiagram
 
 新文档只 upsert 本文件切块向量，不重建整库；删除按 `vector_id` 清理。。
 
-## 5. Agent（已落地）
+## 5. AI Agent 任务拆解（Read.md 加分项 6，已落地）
 
-代码：`AgentPlannerService`、`POST /api/v1/agent/decompose`、前端「需求拆解」页。
+> 题目要求：收到需求 + 技术/接口文档后，判断 **改哪些微服务 / 哪些可并行 / 哪些必须串行**；可用流程图或示例；项目内实现更好。  
+> 本系统实现为「研发变更规划」工作台（规划 Agent），**不自动改多仓代码**。
 
-### 5.1  三个问题
+代码：`AgentPlannerService`、`POST /api/v1/agent/decompose`、前端「研发变更规划」页。
 
-| 问题 | 实现方式 |
-| --- | --- |
-| 改哪些微服务？ | 技术库检索（`serviceCode`）+ 语义信号启发 + 人工范围加权 → `impactedServices` |
-| 哪些可并行？ | `executionMode=parallel` 且 `dependsOn` 空 → `parallelGroups` |
-| 哪些必须串行？ | 读 `service_dependencies` 两阶段挂边 + 通知依赖订单/用户兜底 |
+### 5.1 三个问题 ↔ 实现
 
-### 5.2 流程图（与代码步骤一致）
+| 问题 | 实现方式 | 主要输出字段 |
+| --- | --- | --- |
+| 改哪些微服务？ | 技术库检索（`serviceCode`）+ 语义信号启发 + 人工范围加权 | `impactedServices`、`evidenceHits` |
+| 哪些可并行？ | `executionMode=parallel` 且 `dependsOn` 空 | `parallelGroups` |
+| 哪些必须串行？ | 读 `service_dependencies` 两阶段挂边 + 领域兜底 | `tasks.dependsOn`、`dependencyEdgesUsed`、`suggestedReleaseOrder` |
+
+### 5.2 总览流程图（与代码步骤一致）
 
 ```mermaid
 flowchart TD
-    A[需求标题+正文] --> B[parseSignals 动作/实体/副作用]
+    A[变更需求_可选变更单] --> B[parseSignals]
     B --> C[searchTechnicalDocuments]
-    C --> D[候选服务打分排序]
+    C --> D[候选服务打分]
     D --> E[listServiceDependencies]
-    E --> F[两阶段 buildTasks]
+    E --> F[buildTasks 两阶段DAG]
     F --> G[buildParallelGroups]
-    G --> H[validatePlan 后校验]
-    H --> I[落库 agent_plans.plan_json]
+    G --> H[suggestedReleaseOrder]
+    H --> I[reviewChecklist]
+    I --> J[validatePlan]
+    J --> K[落库 agent_plans]
+    K --> L[工作台展示三问结果]
 ```
 
-### 5.3 示例：下单后发短信
+### 5.3 示例：下单后发短信（对照三问）
 
-1. 受影响：order / user / notification / mall-web  
-2. 可并行：手机号查询、前端成功文案  
-3. 串行：订单事件契约 → 通知消费（依赖订单+用户）→ 联调  
+需求：`用户下单完成后，自动向用户手机号发送短信，并在前端成功页展示结果。`
 
-边界：输出**规划与 DAG**，不自动改多仓业务代码。
+1. **改哪些**：order-service（事件）、user-service（手机号）、notification-service（短信）、mall-web（文案）  
+2. **可并行**：手机号查询、前端成功文案  
+3. **必须串行**：订单事件契约 → 通知消费（依赖订单+用户）→ 联调验收  
+
+```mermaid
+flowchart LR
+  subgraph parallelPrep [可并行准备]
+    U[user-service]
+    W[mall-web]
+  end
+  O[order-service] --> N[notification-service]
+  U --> N
+  O --> E2E[联调验收]
+  U --> E2E
+  N --> E2E
+  W --> E2E
+```
+
+边界：输出**规划与 DAG**，不自动改多仓业务代码；详情见 `项目说明.md` §4。
 
 ## 6. Prompt 设计
 

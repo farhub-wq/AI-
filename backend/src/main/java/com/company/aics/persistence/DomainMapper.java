@@ -182,6 +182,7 @@ public class DomainMapper {
 
     /**
      * Agent 规划实体 → 领域规划；从 plan_json 还原任务与证据字段。
+     * 旧载荷缺新字段时按空列表/空串兼容。
      */
     public DomainModels.AgentPlan toAgentPlan(AgentPlanEntity entity) {
         PlanPayload payload = readPlanPayload(entity.getPlanJson());
@@ -193,11 +194,37 @@ public class DomainMapper {
                 entity.getStatus(),
                 payload.impactedServices() == null ? List.of() : payload.impactedServices(),
                 payload.parallelGroups() == null ? List.of() : payload.parallelGroups(),
-                payload.tasks() == null ? List.of() : payload.tasks(),
+                normalizeTasks(payload.tasks()),
                 payload.validationSteps() == null ? List.of() : payload.validationSteps(),
                 payload.missingEvidence() == null ? List.of() : payload.missingEvidence(),
-                toOffset(entity.getCreatedAt())
+                toOffset(entity.getCreatedAt()),
+                payload.changeTicketId(),
+                payload.priority(),
+                payload.requester(),
+                payload.evidenceHits() == null ? List.of() : payload.evidenceHits(),
+                payload.dependencyEdgesUsed() == null ? List.of() : payload.dependencyEdgesUsed(),
+                payload.suggestedReleaseOrder() == null ? List.of() : payload.suggestedReleaseOrder(),
+                payload.reviewChecklist() == null ? List.of() : payload.reviewChecklist()
         );
+    }
+
+    /** 旧 plan_json 中任务可能缺少 ownerTeam/dependencyType，读入后统一规范化。 */
+    private List<DomainModels.AgentTask> normalizeTasks(List<DomainModels.AgentTask> tasks) {
+        if (tasks == null) {
+            return List.of();
+        }
+        return tasks.stream()
+                .map(task -> new DomainModels.AgentTask(
+                        task.taskId(),
+                        task.taskName(),
+                        task.targetService(),
+                        task.executionMode(),
+                        task.dependsOn() == null ? List.of() : task.dependsOn(),
+                        task.reason(),
+                        task.ownerTeam(),
+                        task.dependencyType()
+                ))
+                .toList();
     }
 
     /** 序列化引用列表为 JSON 字符串。 */
@@ -218,7 +245,7 @@ public class DomainMapper {
         }
     }
 
-    /** 将规划中的结构化字段打包为 JSON 载荷。 */
+    /** 将规划中的结构化字段打包为 JSON 载荷（含变更单与评审增量字段）。 */
     public String writePlanPayload(DomainModels.AgentPlan plan) {
         try {
             return objectMapper.writeValueAsString(new PlanPayload(
@@ -226,7 +253,14 @@ public class DomainMapper {
                     plan.parallelGroups(),
                     plan.tasks(),
                     plan.validationSteps(),
-                    plan.missingEvidence()
+                    plan.missingEvidence(),
+                    plan.changeTicketId(),
+                    plan.priority(),
+                    plan.requester(),
+                    plan.evidenceHits(),
+                    plan.dependencyEdgesUsed(),
+                    plan.suggestedReleaseOrder(),
+                    plan.reviewChecklist()
             ));
         } catch (Exception ex) {
             throw new IllegalStateException("序列化 Agent 规划失败", ex);
@@ -263,27 +297,42 @@ public class DomainMapper {
         }
     }
 
-    /** 反序列化规划载荷；失败返回全空载荷。 */
+    /** 反序列化规划载荷；失败返回全空载荷（兼容旧 JSON 缺字段）。 */
     private PlanPayload readPlanPayload(String json) {
         if (json == null || json.isBlank()) {
-            return new PlanPayload(List.of(), List.of(), List.of(), List.of(), List.of());
+            return emptyPlanPayload();
         }
         try {
             return objectMapper.readValue(json, PlanPayload.class);
         } catch (Exception ex) {
-            return new PlanPayload(List.of(), List.of(), List.of(), List.of(), List.of());
+            return emptyPlanPayload();
         }
     }
 
+    private static PlanPayload emptyPlanPayload() {
+        return new PlanPayload(
+                List.of(), List.of(), List.of(), List.of(), List.of(),
+                null, null, null, List.of(), List.of(), List.of(), List.of()
+        );
+    }
+
     /**
-     * Agent 规划 JSON 载荷：受影响服务、并行组、任务、验收步骤与缺失证据。
+     * Agent 规划 JSON 载荷：原有拆解字段 + 变更单/证据/发布顺序/评审清单。
+     * Jackson 反序列化时缺失字段为 null，由 toAgentPlan 归一为空集合。
      */
     public record PlanPayload(
             List<DomainModels.ImpactedService> impactedServices,
             List<List<String>> parallelGroups,
             List<DomainModels.AgentTask> tasks,
             List<String> validationSteps,
-            List<String> missingEvidence
+            List<String> missingEvidence,
+            String changeTicketId,
+            String priority,
+            String requester,
+            List<DomainModels.AgentEvidenceHit> evidenceHits,
+            List<DomainModels.ServiceDependency> dependencyEdgesUsed,
+            List<String> suggestedReleaseOrder,
+            List<String> reviewChecklist
     ) {
     }
 }

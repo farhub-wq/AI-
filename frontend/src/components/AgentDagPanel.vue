@@ -3,7 +3,7 @@ import { computed } from "vue"
 import type { AgentTaskView } from "@/api/types"
 
 /**
- * Agent 任务 DAG 面板：展示串行链、可并行任务，并将 dependsOn ID 解析为任务名。
+ * 变更任务 DAG 面板：串行链 / 可并行任务，展示负责团队与依赖类型。
  */
 
 const props = defineProps<{
@@ -32,6 +32,15 @@ function modeLabel(mode: string) {
   return mode
 }
 
+function depTypeLabel(type?: string | null) {
+  if (!type) return ""
+  if (type === "event") return "事件依赖"
+  if (type === "data") return "数据依赖"
+  if (type === "api") return "API 依赖"
+  if (type === "config") return "配置/展示"
+  return type
+}
+
 function dependsLabel(task: AgentTaskView) {
   if (!task.dependsOn.length) return "无前置依赖"
   return task.dependsOn
@@ -43,17 +52,21 @@ function dependsLabel(task: AgentTaskView) {
 <template>
   <div class="dag-panel glass-panel">
     <div>
-      <h2 class="section-title">任务 DAG</h2>
-      <p class="section-subtitle">串行依赖用任务名展示；可并行任务单独列出，便于评审谁先谁后。</p>
+      <h2 class="section-title">任务 DAG（可并行 / 必须串行）</h2>
+      <p class="section-subtitle">回答「哪些可同时改、哪些必须先后」；依赖显示为任务名，并标注团队与依赖类型。</p>
     </div>
 
     <div v-if="serialChain.length" class="chain-block">
       <h4>串行 / 有依赖任务</h4>
       <ol class="chain-list">
         <li v-for="task in serialChain" :key="task.taskId">
-          <strong>{{ task.taskName }}</strong>
-          <span class="badge-soft">{{ modeLabel(task.executionMode) }}</span>
+          <div class="task-head">
+            <strong>{{ task.taskName }}</strong>
+            <span class="badge-soft">{{ modeLabel(task.executionMode) }}</span>
+            <span v-if="task.dependencyType" class="badge-soft">{{ depTypeLabel(task.dependencyType) }}</span>
+          </div>
           <small class="mono">{{ task.targetService }}</small>
+          <small v-if="task.ownerTeam">负责团队：{{ task.ownerTeam }}</small>
           <p>前置：{{ dependsLabel(task) }}</p>
           <p>{{ task.reason }}</p>
         </li>
@@ -70,6 +83,8 @@ function dependsLabel(task: AgentTaskView) {
           </header>
           <p>{{ task.reason }}</p>
           <small class="mono">目标服务：{{ task.targetService }}</small>
+          <small v-if="task.ownerTeam">负责团队：{{ task.ownerTeam }}</small>
+          <small v-if="task.dependencyType">{{ depTypeLabel(task.dependencyType) }}</small>
         </article>
       </div>
     </div>
@@ -103,12 +118,22 @@ function dependsLabel(task: AgentTaskView) {
   background: rgba(255, 255, 255, 0.82);
 }
 
+.task-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
 .chain-list p,
 .task-item p,
-.task-item small {
+.task-item small,
+.chain-list small {
   margin: 6px 0 0;
   color: #56657f;
   line-height: 1.6;
+  display: block;
 }
 
 .task-list {

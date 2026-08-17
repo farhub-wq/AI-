@@ -154,6 +154,14 @@ public final class DomainModels {
     ) {
     }
 
+    /** 技术文档命中证据（可追溯为何改这些服务）。 */
+    public record AgentEvidenceHit(
+            String fileName,
+            String serviceCode,
+            double score
+    ) {
+    }
+
     /** Agent 拆解出的实施任务。 */
     public record AgentTask(
             Long taskId,
@@ -161,11 +169,15 @@ public final class DomainModels {
             String targetService,
             String executionMode,
             List<Long> dependsOn,
-            String reason
+            String reason,
+            /** 负责团队（来自服务目录，可空）。 */
+            String ownerTeam,
+            /** 主要上游依赖类型 event/data/api/config（可空）。 */
+            String dependencyType
     ) {
     }
 
-    /** 一次需求拆解生成的完整规划。 */
+    /** 一次需求拆解生成的完整规划（含生产向变更单与评审字段）。 */
     public record AgentPlan(
             Long id,
             Long userId,
@@ -177,7 +189,21 @@ public final class DomainModels {
             List<AgentTask> tasks,
             List<String> validationSteps,
             List<String> missingEvidence,
-            OffsetDateTime createdAt
+            OffsetDateTime createdAt,
+            /** 变更单号（可选）。 */
+            String changeTicketId,
+            /** 优先级 P0/P1/P2（可选）。 */
+            String priority,
+            /** 提出人（可选）。 */
+            String requester,
+            /** 本计划用到的文档命中。 */
+            List<AgentEvidenceHit> evidenceHits,
+            /** 本计划实际用到的依赖边。 */
+            List<ServiceDependency> dependencyEdgesUsed,
+            /** 建议合并/发布顺序（服务码拓扑序）。 */
+            List<String> suggestedReleaseOrder,
+            /** 人工评审清单。 */
+            List<String> reviewChecklist
     ) {
     }
 }

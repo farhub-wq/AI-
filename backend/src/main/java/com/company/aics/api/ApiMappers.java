@@ -142,6 +142,11 @@ public final class ApiMappers {
         );
     }
 
+    /** 文档命中证据 → 视图。 */
+    public static ApiModels.AgentEvidenceHitView toAgentEvidenceHitView(DomainModels.AgentEvidenceHit hit) {
+        return new ApiModels.AgentEvidenceHitView(hit.fileName(), hit.serviceCode(), hit.score());
+    }
+
     /**
      * Agent 任务 → 任务视图。
      */
@@ -152,7 +157,9 @@ public final class ApiMappers {
                 task.targetService(),
                 task.executionMode(),
                 task.dependsOn(),
-                task.reason()
+                task.reason(),
+                task.ownerTeam(),
+                task.dependencyType()
         );
     }
 
@@ -170,7 +177,16 @@ public final class ApiMappers {
                 plan.tasks().stream().map(ApiMappers::toAgentTaskView).toList(),
                 plan.validationSteps(),
                 plan.missingEvidence(),
-                plan.createdAt()
+                plan.createdAt(),
+                plan.changeTicketId(),
+                plan.priority(),
+                plan.requester(),
+                plan.evidenceHits() == null ? List.of() : plan.evidenceHits().stream()
+                        .map(ApiMappers::toAgentEvidenceHitView).toList(),
+                plan.dependencyEdgesUsed() == null ? List.of() : plan.dependencyEdgesUsed().stream()
+                        .map(ApiMappers::toServiceDependencyView).toList(),
+                plan.suggestedReleaseOrder() == null ? List.of() : plan.suggestedReleaseOrder(),
+                plan.reviewChecklist() == null ? List.of() : plan.reviewChecklist()
         );
     }
 

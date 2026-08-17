@@ -161,6 +161,13 @@ export interface ImpactedServiceView {
   reason: string
 }
 
+/** 技术文档命中证据（可追溯为何改这些服务） */
+export interface AgentEvidenceHitView {
+  fileName: string
+  serviceCode: string
+  score: number
+}
+
 /** Agent 规划中的单个改造任务 */
 export interface AgentTaskView {
   taskId: number
@@ -169,6 +176,8 @@ export interface AgentTaskView {
   executionMode: string
   dependsOn: number[]
   reason: string
+  ownerTeam?: string | null
+  dependencyType?: string | null
 }
 
 /** 提交需求拆解后的创建回执（摘要） */
@@ -180,7 +189,7 @@ export interface AgentPlanCreateResponse {
   missingEvidence: string[]
 }
 
-/** Agent 规划完整详情 */
+/** 研发变更规划完整详情（含变更单与生产评审字段） */
 export interface AgentPlanDetailView {
   planId: number
   requirementTitle: string
@@ -192,6 +201,13 @@ export interface AgentPlanDetailView {
   validationSteps: string[]
   missingEvidence: string[]
   createdAt: string
+  changeTicketId?: string | null
+  priority?: string | null
+  requester?: string | null
+  evidenceHits?: AgentEvidenceHitView[]
+  dependencyEdgesUsed?: ServiceDependencyView[]
+  suggestedReleaseOrder?: string[]
+  reviewChecklist?: string[]
 }
 
 /** 历史规划列表摘要 */
@@ -210,4 +226,12 @@ export interface ServiceCatalogView {
   serviceType: string
   ownerTeam?: string | null
   description?: string | null
+}
+
+/** 服务依赖边（串行依据） */
+export interface ServiceDependencyView {
+  fromServiceCode: string
+  toServiceCode: string
+  dependencyType: string
+  dependencyDesc?: string | null
 }
